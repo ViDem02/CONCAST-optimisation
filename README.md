@@ -81,9 +81,7 @@ The application consists of three main services:
   - Optimization results viewer
   - Interactive charts with Recharts
 
-## Workflow
 
-[YouTube video link](https://youtu.be/ZAKp8gGJdh8)
 
 ## Examples of file
 
