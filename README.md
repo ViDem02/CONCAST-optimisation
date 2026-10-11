@@ -84,7 +84,6 @@ The application consists of three main services:
 ## Workflow
 
 [YouTube video link](https://youtu.be/ZAKp8gGJdh8)
-Do **not** share this link to unauthorized persons.
 
 ## Examples of file
 
