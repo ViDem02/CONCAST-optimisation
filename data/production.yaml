@@ -1,0 +1,25 @@
+processes: 
+  s_finit:
+    electricity_consumption_kWh: 100
+    max_forward_minutes: 0
+    max_backwards_minutes: 0
+  s_torre:
+    electricity_consumption_kWh: 130
+    max_forward_minutes: 0
+    max_backwards_minutes: 0
+  s_hiro:
+    electricity_consumption_kWh: 134
+    max_forward_minutes: 0
+    max_backwards_minutes: 0    
+  b_past:
+    electricity_consumption_kWh: 278
+    max_forward_minutes: 120
+    max_backwards_minutes: 120
+  b_burr:
+    electricity_consumption_kWh: 5
+    max_forward_minutes: 120
+    max_backwards_minutes: 120
+  b_conf:
+    electricity_consumption_kWh: 19
+    max_forward_minutes: 120
+    max_backwards_minutes: 120

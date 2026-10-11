@@ -1,0 +1,13 @@
+# Environment variables
+*.env
+
+_venv
+_data
+
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db

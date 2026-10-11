@@ -1,0 +1,97 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+
+<div style="max-width: 800px;">
+    <p><strong>Dataset:</strong> {{ dataset.name }}</p>
+    <p style="color: #666;">{{ help_text }}</p>
+
+    <form method="post" enctype="multipart/form-data" action="">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="{{ action }}">
+        <input type="hidden" name="_selected_action" value="{{ dataset.pk }}">
+        
+        <div style="margin: 20px 0;">
+            <label for="csv_file" style="display: block; font-weight: bold; margin-bottom: 5px;">
+                CSV File:
+            </label>
+            <input type="file" name="csv_file" id="csv_file" accept=".csv" required 
+                   style="padding: 5px; border: 1px solid #ccc; border-radius: 4px;">
+        </div>
+
+        <div style="margin: 20px 0;">
+            <label style="display: block; margin-bottom: 10px;">
+                <input type="checkbox" name="clear_existing" id="clear_existing">
+                <strong>Clear existing records</strong> before importing
+            </label>
+            <p style="color: #666; margin-left: 25px; font-size: 12px;">
+                ⚠️ Warning: This will delete all existing records for this dataset
+            </p>
+        </div>
+
+        <div style="margin: 20px 0;">
+            <label style="display: block;">
+                <input type="checkbox" name="skip_validation" id="skip_validation">
+                <strong>Skip validation</strong> (not recommended)
+            </label>
+            <p style="color: #666; margin-left: 25px; font-size: 12px;">
+                By default, the import checks for data continuity and holes in the dataset
+            </p>
+        </div>
+
+        <div style="margin: 30px 0; padding: 15px; background-color: #f8f9fa; border-left: 4px solid #007bff; border-radius: 4px;">
+            <h3 style="margin-top: 0;">CSV Format Requirements:</h3>
+            <p style="margin: 5px 0;">The CSV file must include the following columns:</p>
+            <ul style="margin: 10px 0; padding-left: 20px;">
+                {% if action == 'import_temperature_records' %}
+                    <li><code>Time</code> - Format: YYYY-MM-DD HH:MM:SS or DD-MM-YYYY HH:MM:SS</li>
+                    <li><code>outside_temperature</code> - Numeric value</li>
+                {% elif action == 'import_prices_records' %}
+                    <li><code>Time</code> - Format: YYYY-MM-DD HH:MM:SS</li>
+                    <li><code>electricity_price</code> - Numeric value</li>
+                    <li><code>methane_prices</code> - Numeric value</li>
+                {% elif action == 'import_generation_records' %}
+                    <li><code>Time</code> - Format: YYYY-MM-DD HH:MM:SS</li>
+                    <li><code>cogen_kWh</code> - Numeric value</li>
+                    <li><code>solar_kWh</code> - Numeric value</li>
+                {% endif %}
+            </ul>
+        </div>
+
+        <div style="margin-top: 30px;">
+            <input type="submit" name="apply" value="Import Records" 
+                   class="default" 
+                   style="padding: 10px 20px; background-color: #417690; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
+            <a href="javascript:history.back()" 
+               style="margin-left: 10px; padding: 10px 20px; display: inline-block; text-decoration: none; color: #333; border: 1px solid #ccc; border-radius: 4px;">
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+
+<script>
+    // Add confirmation for clearing existing records
+    document.getElementById('clear_existing').addEventListener('change', function(e) {
+        if (e.target.checked) {
+            if (!confirm('Are you sure you want to delete all existing records? This action cannot be undone.')) {
+                e.target.checked = false;
+            }
+        }
+    });
+
+    // Debug: Log form submission
+    document.querySelector('form').addEventListener('submit', function(e) {
+        console.log('Form is being submitted');
+        const fileInput = document.getElementById('csv_file');
+        if (!fileInput.files || fileInput.files.length === 0) {
+            e.preventDefault();
+            alert('Please select a CSV file before importing.');
+            return false;
+        }
+        console.log('File selected:', fileInput.files[0].name);
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,172 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 20px auto; padding: 20px;">
+    <h1>{{ title }}</h1>
+    
+    <form method="post" enctype="multipart/form-data" id="importForm">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="{{ action_name }}">
+        <input type="hidden" name="apply" value="1">
+        
+        <div style="margin-bottom: 20px;">
+            <label for="plan_name" style="display: block; font-weight: bold; margin-bottom: 5px;">
+                Production Plan Name: <span style="color: red;">*</span>
+            </label>
+            <input 
+                type="text" 
+                name="plan_name" 
+                id="plan_name" 
+                required 
+                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+                placeholder="Enter a unique name for the production plan"
+            >
+            <small style="color: #666;">A unique identifier for this production plan</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label for="csv_file" style="display: block; font-weight: bold; margin-bottom: 5px;">
+                CSV Timetable File: <span style="color: red;">*</span>
+            </label>
+            <input 
+                type="file" 
+                name="csv_file" 
+                id="csv_file" 
+                accept=".csv" 
+                required
+                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+            >
+            <small style="color: #666;">CSV file with production timetable (must have .csv extension)</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label for="yaml_file" style="display: block; font-weight: bold; margin-bottom: 5px;">
+                YAML Configuration File: <span style="color: red;">*</span>
+            </label>
+            <input 
+                type="file" 
+                name="yaml_file" 
+                id="yaml_file" 
+                accept=".yaml,.yml" 
+                required
+                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+            >
+            <small style="color: #666;">YAML file with process configuration (must have .yaml or .yml extension)</small>
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display: block;">
+                <input type="checkbox" name="clear_existing" id="clear_existing">
+                <strong>Clear existing plan with the same name</strong>
+            </label>
+            <small style="color: #666;">If checked, any existing plan with the same name will be deleted before importing</small>
+        </div>
+        
+        <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 20px;">
+            <h3 style="margin-top: 0;">File Format Requirements:</h3>
+            
+            <h4>CSV Timetable Format:</h4>
+            <ul>
+                <li>First column: <code>Time</code> (format: YYYY-MM-DD HH:MM:SS)</li>
+                <li>Remaining columns: Process names (values: 0 or 1)</li>
+                <li>1 = process is active, 0 = process is inactive</li>
+                <li>Each row represents a 15-minute interval</li>
+            </ul>
+            <pre style="background-color: #fff; padding: 10px; border: 1px solid #ddd; overflow-x: auto;">Time,Process1,Process2,Process3
+2024-01-01 00:00:00,1,0,1
+2024-01-01 00:15:00,1,0,1
+2024-01-01 00:30:00,0,1,1</pre>
+            
+            <h4>YAML Configuration Format:</h4>
+            <ul>
+                <li>Define processes with their properties</li>
+                <li>Process names must match CSV column headers</li>
+                <li>Required fields: <code>electricity_consumption_kWh</code></li>
+                <li>Optional fields: <code>max_forward_minutes</code>, <code>max_backwards_minutes</code></li>
+            </ul>
+            <pre style="background-color: #fff; padding: 10px; border: 1px solid #ddd; overflow-x: auto;">processes:
+  Process1:
+    electricity_consumption_kWh: 100
+    max_forward_minutes: 60
+    max_backwards_minutes: 30
+  Process2:
+    electricity_consumption_kWh: 150
+    max_forward_minutes: 0
+    max_backwards_minutes: 0</pre>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <button 
+                type="submit" 
+                style="background-color: #417690; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;"
+                onmouseover="this.style.backgroundColor='#305d75'"
+                onmouseout="this.style.backgroundColor='#417690'"
+            >
+                Import Production Plan
+            </button>
+            <a 
+                href="{% url 'admin:PlanningApp_weeklyproductionplan_changelist' %}" 
+                style="margin-left: 10px; padding: 10px 20px; border: 1px solid #ccc; border-radius: 4px; text-decoration: none; color: #333; display: inline-block;"
+            >
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+
+<script>
+document.getElementById('importForm').addEventListener('submit', function(e) {
+    const planName = document.getElementById('plan_name').value;
+    const csvFile = document.getElementById('csv_file').files[0];
+    const yamlFile = document.getElementById('yaml_file').files[0];
+    const clearExisting = document.getElementById('clear_existing').checked;
+    
+    console.log('Form submission:', {
+        planName: planName,
+        csvFile: csvFile ? csvFile.name : 'none',
+        yamlFile: yamlFile ? yamlFile.name : 'none',
+        clearExisting: clearExisting
+    });
+    
+    if (!planName) {
+        alert('Please enter a production plan name');
+        e.preventDefault();
+        return false;
+    }
+    
+    if (!csvFile) {
+        alert('Please select a CSV timetable file');
+        e.preventDefault();
+        return false;
+    }
+    
+    if (!yamlFile) {
+        alert('Please select a YAML configuration file');
+        e.preventDefault();
+        return false;
+    }
+    
+    if (!csvFile.name.endsWith('.csv')) {
+        alert('CSV file must have .csv extension');
+        e.preventDefault();
+        return false;
+    }
+    
+    if (!yamlFile.name.endsWith('.yaml') && !yamlFile.name.endsWith('.yml')) {
+        alert('YAML file must have .yaml or .yml extension');
+        e.preventDefault();
+        return false;
+    }
+    
+    if (clearExisting) {
+        if (!confirm('Are you sure you want to clear any existing plan with the name "' + planName + '"?')) {
+            e.preventDefault();
+            return false;
+        }
+    }
+    
+    return true;
+});
+</script>
+{% endblock %}

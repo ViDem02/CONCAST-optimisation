@@ -1,0 +1,106 @@
+.results-charts {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: var(--shadow);
+}
+
+.charts-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.control-group label {
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.control-group select {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background-color: white;
+  color: var(--text-primary);
+  min-width: 180px;
+}
+
+.data-info {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-color);
+  border-radius: 6px;
+}
+
+.chart-container {
+  margin-top: 1.5rem;
+}
+
+.chart-container h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+}
+
+.custom-tooltip {
+  background-color: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.75rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.tooltip-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.custom-tooltip p {
+  font-size: 0.8125rem;
+  margin: 0.25rem 0;
+}
+
+/* Recharts overrides */
+.recharts-wrapper {
+  margin: 0 auto;
+}
+
+.recharts-legend-wrapper {
+  padding-top: 1rem !important;
+}
+
+@media (max-width: 768px) {
+  .charts-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control-group select {
+    width: 100%;
+  }
+
+  .chart-container h3 {
+    font-size: 1rem;
+  }
+}
