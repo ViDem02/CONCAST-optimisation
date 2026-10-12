@@ -82,15 +82,7 @@ The application consists of three main services:
   - Optimization results viewer
   - Interactive charts with Recharts
 
-## Documentation
 
-See [docs/README.md](docs/README.md) for the full documentation map, including the
-[mathematical specification of the problem](docs/specification/mathematical-specification.pdf).
-
-## Workflow
-
-[YouTube video link](https://youtu.be/ZAKp8gGJdh8)
-Do **not** share this link to unauthorized persons.
 
 ## Examples of file
 
