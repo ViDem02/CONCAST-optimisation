@@ -9,6 +9,7 @@ from SimulationApp.export_timeshifting import export_timeshifting_to_json
 class OptimizationAdmin(admin.ModelAdmin):
     list_display = [
         'name',
+        'optimizer',
         'reference_production_plan',
         'optimized_production_plan',
         'reference_week_start',
@@ -21,7 +22,7 @@ class OptimizationAdmin(admin.ModelAdmin):
         'created_at',
         'completed_at'
     ]
-    list_filter = ['created_at', 'completed_at']
+    list_filter = ['optimizer', 'created_at', 'completed_at']
     search_fields = ['name', 'notes']
     ordering = ['-created_at']
     readonly_fields = [
@@ -95,7 +96,7 @@ class OptimizationAdmin(admin.ModelAdmin):
     
     def run_optimization(self, request, queryset):
         """Run optimization for selected optimization objects."""
-        from .optimizer import run_optimization
+        from .optimizer_packager import run_optimization
         
         success_count = 0
         error_count = 0

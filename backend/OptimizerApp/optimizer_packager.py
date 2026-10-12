@@ -1,13 +1,16 @@
 """
-Shift optimization module implementing LSQR initialization and coordinate descent.
+Optimizer packager: bridge between the database and the optimizers.
 
-This module implements the optimization logic from simulator.m:
+This module does not optimize anything itself. It packages the data of an
+Optimization (production plan, generation and prices) into an
+OptimizationProblem following simulator.m, hands it to the optimizer selected
+in the Optimization object (see OptimizerApp.optimizers), and unpacks the
+returned shifts into an optimized production plan and cost metrics:
 1. Retimes hourly datasets to 5-minute timesteps
 2. Builds production timetable matrix (nPhases x N) where each row is a phase activity
 3. Expands phases to independent runs (contiguous activity periods)
-4. Uses LSQR for initial shift estimation
-5. Refines with coordinate descent to minimize costs
-6. Creates optimized production plan with shifted schedules
+4. Runs the selected optimizer ("milp" or "from-scratch")
+5. Creates optimized production plan with shifted schedules
 
 Matrix orientation (following simulator.m):
 - phase_active: nPhases x N (each row is a phase-run, each column is a timestep)
@@ -20,15 +23,15 @@ This approach closely mirrors simulator.m for consistency and correctness.
 from datetime import datetime, timedelta
 import pytz
 import numpy as np
-from scipy.sparse import lil_matrix
-from scipy.sparse.linalg import lsqr
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 
+from .optimizers import OptimizationProblem, get_optimizer
+from .optimizers.base import apply_shifts_from_steps, compute_cost
+
 
 TIMESTEP_MINUTES = 5  # 5-minute timesteps
-MAX_ITERATIONS = 500  # Maximum iterations for coordinate descent
 
 
 def retime_hourly_to_5min(hourly_data, start_time, end_time, method='previous'):
@@ -216,65 +219,10 @@ def expand_phases_to_runs(phase_active, phase_info):
     return expanded_active, expanded_info, expanded_names
 
 
-def apply_shifts_from_steps(base_matrix, shift_steps):
-    """
-    Apply time shifts to each row of the phase activity matrix.
-    This follows simulator.m's apply_shifts_from_steps function.
-    
-    Args:
-        base_matrix: nPhases x N numpy array
-        shift_steps: array of nPhases integers (positive = delay, negative = advance)
-    
-    Returns:
-        Shifted nPhases x N numpy array
-    """
-    nPhases, N = base_matrix.shape
-    shifted = np.zeros_like(base_matrix)
-    
-    for i in range(nPhases):
-        shift = int(shift_steps[i])
-        original = base_matrix[i, :]
-        
-        if shift == 0:
-            shifted[i, :] = original
-        elif shift > 0:
-            # Delay: shift forward
-            shifted[i, shift:] = original[:-shift]
-        else:
-            # Advance: shift backward
-            shifted[i, :shift] = original[-shift:]
-    
-    return shifted
-
-
-def compute_cost(elec_demand, gen_kWh, price_el):
-    """
-    Compute total cost based on demand, generation, and prices.
-    
-    Cost = sum(grid_purchase * price_el)
-    where grid_purchase = max(0, demand - generation)
-    
-    Also tracks wasted energy = max(0, generation - demand)
-    """
-    grid_purchase = np.maximum(0, elec_demand - gen_kWh)
-    wasted_energy = np.maximum(0, gen_kWh - elec_demand)
-    
-    cost_el = np.sum(grid_purchase * price_el)
-    total_wasted = np.sum(wasted_energy)
-    
-    return cost_el, {
-        'grid_purchase': grid_purchase,
-        'wasted_energy': wasted_energy,
-        'total_wasted': total_wasted
-    }
-
-
 def run_optimization(optimization_id):
     """
-    Run the full optimization for an Optimization object.
-    
-    Implements LSQR initialization + coordinate descent refinement
-    following the algorithm in simulator.m
+    Run the full optimization for an Optimization object, using the
+    optimizer selected in its `optimizer` field.
     
     Returns:
         Updated Optimization object with results
@@ -285,6 +233,7 @@ def run_optimization(optimization_id):
     from .models import Optimization
     
     optimization = Optimization.objects.get(id=optimization_id)
+    optimizer = get_optimizer(optimization.optimizer)
     
     # Get datasets from optimization object
     generation_dataset = optimization.generation_dataset
@@ -359,122 +308,27 @@ def run_optimization(optimization_id):
     )
     price_el = np.array(electricity_price_5min)
     
-    # LSQR Initialization (following simulator.m)
-    # Build sparse matrix A for LSQR where each column represents a shift option
-    max_shift_steps = max([max(info['max_forward_steps'], info['max_backward_steps']) 
-                           for info in phase_info] + [24])  # At least ±2 hours
+    # Run the selected optimizer
+    problem = OptimizationProblem(
+        elec_demand_matrix=elec_demand_matrix,
+        gen_kWh=gen_kWh,
+        price_el=price_el,
+        max_shift_steps=np.array([min(info['max_forward_steps'], info['max_backward_steps'])
+                                  for info in phase_info], dtype=int),
+        run_info=phase_info
+    )
+    result = optimizer.optimize(problem)
     
-    shift_candidates = list(range(-max_shift_steps, max_shift_steps + 1))
-    n_shifts = len(shift_candidates)
-    
-    A = lil_matrix((N, nPhases * n_shifts))
-    col_idx = 0
-    
-    for i in range(nPhases):
-        for shift_step in shift_candidates:
-            # Check if shift is within allowed bounds for this phase
-            info = phase_info[i]
-            if abs(shift_step) <= min(info['max_forward_steps'], info['max_backward_steps']):
-                shifted_col = np.zeros(N)
-                original = elec_demand_matrix[i, :]  # Row i of demand matrix
-                
-                if shift_step == 0:
-                    shifted_col = original
-                elif shift_step > 0:
-                    shifted_col[shift_step:] = original[:-shift_step]
-                else:
-                    shifted_col[:shift_step] = original[-shift_step:]
-                
-                A[:, col_idx] = shifted_col.reshape(-1, 1)
-            
-            col_idx += 1
-    
-    A = A.tocsr()
-    b = gen_kWh
-    
-    # Run LSQR
-    x_lsqr, istop, itn, r1norm = lsqr(A, b, atol=1e-6, btol=1e-6, iter_lim=500)[:4]
-    
-    # Extract initial shifts from LSQR solution, respecting per-run bounds
-    initial_shifts = np.zeros(nPhases, dtype=int)
-    col_ptr = 0
-    for i in range(nPhases):
-        run_cols = x_lsqr[col_ptr:col_ptr + n_shifts]
-        col_ptr += n_shifts
-
-        # Allowed range in steps for this run
-        max_steps_allowed = min(phase_info[i]['max_forward_steps'], phase_info[i]['max_backward_steps'])
-
-        # Build list of indices that are within allowed bounds
-        allowed_indices = [idx for idx, s in enumerate(shift_candidates) if abs(s) <= max_steps_allowed]
-
-        if allowed_indices:
-            # Pick the best among allowed indices
-            best_idx_local = allowed_indices[0]
-            best_val = run_cols[best_idx_local]
-            for idx in allowed_indices:
-                if run_cols[idx] > best_val:
-                    best_idx_local = idx
-                    best_val = run_cols[idx]
-            chosen_shift = shift_candidates[best_idx_local]
-        else:
-            # No allowed shifts? default to 0
-            chosen_shift = 0
-
-        # Extra safety: clamp to allowed range
-        chosen_shift = int(max(-max_steps_allowed, min(max_steps_allowed, chosen_shift)))
-        initial_shifts[i] = chosen_shift
-    
-    # Calculate initial cost with LSQR shifts
-    shifted_demand = apply_shifts_from_steps(elec_demand_matrix, initial_shifts)
-    total_demand = shifted_demand.sum(axis=0)  # Sum across phases (axis=0) to get total per timestep
-    initial_cost, _ = compute_cost(total_demand, gen_kWh, price_el)
+    # Ensure the returned shifts are integers within the asymmetric bounds -B_r..F_r
+    current_shifts = np.clip(
+        np.asarray(result.shift_steps).round().astype(int),
+        -np.array([info['max_backward_steps'] for info in phase_info]),
+        np.array([info['max_forward_steps'] for info in phase_info])
+    )
     
     # Baseline cost (no optimization)
     baseline_demand = elec_demand_matrix.sum(axis=0)  # Sum across phases
     baseline_cost, _ = compute_cost(baseline_demand, gen_kWh, price_el)
-    
-    # Coordinate Descent Refinement (following simulator.m)
-    # Ensure current shifts start within bounds
-    current_shifts = initial_shifts.copy()
-    for i in range(nPhases):
-        max_steps_allowed = min(phase_info[i]['max_forward_steps'], phase_info[i]['max_backward_steps'])
-        current_shifts[i] = int(max(-max_steps_allowed, min(max_steps_allowed, current_shifts[i])))
-    best_cost = initial_cost
-    improved = True
-    iteration = 0
-    max_iterations = 5 * nPhases
-    
-    while improved and iteration < max_iterations:
-        improved = False
-        
-        for i in range(nPhases):
-            info = phase_info[i]
-            current_shift = current_shifts[i]
-            
-            # Try shifting this phase by ±1 step
-            for delta in [-1, +1]:
-                new_shift = current_shift + delta
-                
-                # Check bounds
-                if abs(new_shift) > min(info['max_forward_steps'], info['max_backward_steps']):
-                    continue
-                
-                # Test this shift
-                test_shifts = current_shifts.copy()
-                test_shifts[i] = new_shift
-                
-                shifted_demand = apply_shifts_from_steps(elec_demand_matrix, test_shifts)
-                total_demand = shifted_demand.sum(axis=0)  # Sum across phases
-                test_cost, _ = compute_cost(total_demand, gen_kWh, price_el)
-                
-                if test_cost < best_cost:
-                    best_cost = test_cost
-                    current_shifts[i] = new_shift
-                    improved = True
-                    break  # Move to next phase
-        
-        iteration += 1
     
     # Final cost calculation
     final_shifted_demand = apply_shifts_from_steps(elec_demand_matrix, current_shifts)
@@ -583,10 +437,8 @@ def run_optimization(optimization_id):
             })
         
         optimization.optimization_data = {
-            'lsqr_iterations': int(itn),
-            'lsqr_residual': float(r1norm),
-            'coordinate_descent_iterations': iteration,
-            'initial_cost_after_lsqr': float(initial_cost),
+            'optimizer': optimizer.name,
+            **result.data,  # Optimizer-specific diagnostics
             'baseline_cost': float(baseline_cost),
             'final_cost': float(final_cost),
             'total_wasted_energy': float(final_details['total_wasted']),

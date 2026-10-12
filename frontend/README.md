@@ -5,7 +5,7 @@ React frontend for viewing simulation results.
 ## Setup
 
 ```bash
-cd simulator_project/frontend
+cd frontend
 npm install
 npm run dev
 ```
@@ -15,13 +15,8 @@ Opens at `http://localhost:3000`
 ## Prerequisites
 
 - Node.js 18+
-- Django backend at `http://localhost:8000`
-- CORS configured in Django:
-  ```python
-  INSTALLED_APPS = [..., 'corsheaders', ...]
-  MIDDLEWARE = [..., 'corsheaders.middleware.CorsMiddleware', ...]
-  CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
-  ```
+- Django backend at `http://localhost:8000` (the Vite dev server proxies `/api` and `/admin` to it)
+- A Django user account: the API requires login, and the app redirects to `/admin/login/` when you are not logged in
 
 ## Usage
 

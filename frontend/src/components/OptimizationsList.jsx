@@ -91,6 +91,11 @@ function OptimizationsList() {
 
               <div className="card-content">
                 <div className="info-row">
+                  <span className="label">Optimizer:</span>
+                  <span className="value">{optimization.optimizer_label || optimization.optimizer}</span>
+                </div>
+
+                <div className="info-row">
                   <span className="label">Reference Plan:</span>
                   <span className="value">{optimization.reference_production_plan_name}</span>
                 </div>

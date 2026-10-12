@@ -12,6 +12,10 @@ class OptimizationSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True
     )
+    optimizer_label = serializers.CharField(
+        source='get_optimizer_display',
+        read_only=True
+    )
     is_completed = serializers.BooleanField(read_only=True)
     
     class Meta:
@@ -20,6 +24,8 @@ class OptimizationSerializer(serializers.ModelSerializer):
             'id',
             'name',
             'notes',
+            'optimizer',
+            'optimizer_label',
             'reference_production_plan',
             'reference_production_plan_name',
             'optimized_production_plan',
@@ -56,6 +62,10 @@ class OptimizationDetailSerializer(serializers.ModelSerializer):
         source='optimized_production_plan.name',
         read_only=True,
         allow_null=True
+    )
+    optimizer_label = serializers.CharField(
+        source='get_optimizer_display',
+        read_only=True
     )
     is_completed = serializers.BooleanField(read_only=True)
     

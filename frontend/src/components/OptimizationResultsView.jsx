@@ -120,14 +120,23 @@ function OptimizationResultsView() {
           
           <div className="details-grid">
             <div className="detail-item">
-              <span className="detail-label">Algorithm Iterations (LSQR):</span>
-              <span className="detail-value">{optimizationData.lsqr_iterations || 'N/A'}</span>
+              <span className="detail-label">Optimizer:</span>
+              <span className="detail-value">{optimization.optimizer_label || optimization.optimizer || 'N/A'}</span>
             </div>
             
-            <div className="detail-item">
-              <span className="detail-label">Coordinate Descent Iterations:</span>
-              <span className="detail-value">{optimizationData.coordinate_descent_iterations || 'N/A'}</span>
-            </div>
+            {optimizationData.lsqr_iterations !== undefined && (
+              <div className="detail-item">
+                <span className="detail-label">Algorithm Iterations (LSQR):</span>
+                <span className="detail-value">{optimizationData.lsqr_iterations}</span>
+              </div>
+            )}
+            
+            {optimizationData.coordinate_descent_iterations !== undefined && (
+              <div className="detail-item">
+                <span className="detail-label">Coordinate Descent Iterations:</span>
+                <span className="detail-value">{optimizationData.coordinate_descent_iterations}</span>
+              </div>
+            )}
             
             <div className="detail-item">
               <span className="detail-label">Number of Timesteps:</span>
@@ -139,10 +148,12 @@ function OptimizationResultsView() {
               <span className="detail-value">{optimizationData.num_runs_optimized || 'N/A'}</span>
             </div>
             
-            <div className="detail-item">
-              <span className="detail-label">Initial Cost After LSQR:</span>
-              <span className="detail-value">€{optimizationData.initial_cost_after_lsqr?.toFixed(2) || 'N/A'}</span>
-            </div>
+            {optimizationData.initial_cost_after_lsqr !== undefined && (
+              <div className="detail-item">
+                <span className="detail-label">Initial Cost After LSQR:</span>
+                <span className="detail-value">€{optimizationData.initial_cost_after_lsqr.toFixed(2)}</span>
+              </div>
+            )}
             
             <div className="detail-item">
               <span className="detail-label">Total Wasted Energy:</span>
@@ -157,7 +168,9 @@ function OptimizationResultsView() {
               <BarChart
                 data={[
                   { name: 'Baseline', cost: optimizationData.baseline_cost },
-                  { name: 'After LSQR', cost: optimizationData.initial_cost_after_lsqr },
+                  ...(optimizationData.initial_cost_after_lsqr !== undefined
+                    ? [{ name: 'After LSQR', cost: optimizationData.initial_cost_after_lsqr }]
+                    : []),
                   { name: 'Final', cost: optimizationData.final_cost }
                 ]}
                 margin={{ top: 20, right: 30, left: 20, bottom: 5 }}

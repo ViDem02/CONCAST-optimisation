@@ -9,6 +9,27 @@ const api = axios.create({
   },
 });
 
+// The backend uses Django session authentication: send the CSRF token on
+// unsafe requests and send unauthenticated users to the Django login page.
+const configureAuth = (client) => {
+  client.defaults.withCredentials = true;
+  client.defaults.xsrfCookieName = 'csrftoken';
+  client.defaults.xsrfHeaderName = 'X-CSRFToken';
+  client.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response?.status === 401) {
+        const next = window.location.pathname + window.location.search;
+        window.location.href = `/admin/login/?next=${encodeURIComponent(next)}`;
+      }
+      return Promise.reject(error);
+    }
+  );
+};
+
+configureAuth(axios); // Components that call axios directly
+configureAuth(api);
+
 // Simulations API
 export const simulationApi = {
   // List all simulations

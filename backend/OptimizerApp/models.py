@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator
 from PlanningApp.models import WeeklyProductionPlan
+from .optimizers import OPTIMIZER_CHOICES, DEFAULT_OPTIMIZER
 
 
 class Optimization(models.Model):
@@ -12,6 +13,13 @@ class Optimization(models.Model):
     """
     name = models.CharField(max_length=255, unique=True)
     notes = models.TextField(blank=True, help_text="Additional notes about this optimization")
+    
+    optimizer = models.CharField(
+        max_length=50,
+        choices=OPTIMIZER_CHOICES,
+        default=DEFAULT_OPTIMIZER,
+        help_text="Optimization algorithm used to compute the shifts"
+    )
     
     reference_production_plan = models.ForeignKey(
         WeeklyProductionPlan,

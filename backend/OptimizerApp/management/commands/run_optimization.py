@@ -4,11 +4,13 @@ Management command to run an optimization calculation.
 Usage:
     python manage.py run_optimization <optimization_id>
     python manage.py run_optimization --optimization-name "My Optimization"
+    python manage.py run_optimization <optimization_id> --optimizer milp
 """
 
 from django.core.management.base import BaseCommand, CommandError
 from OptimizerApp.models import Optimization
-from OptimizerApp.optimizer import run_optimization
+from OptimizerApp.optimizer_packager import run_optimization
+from OptimizerApp.optimizers import OPTIMIZERS
 
 
 class Command(BaseCommand):
@@ -25,6 +27,12 @@ class Command(BaseCommand):
             '--optimization-name',
             type=str,
             help='Name of the optimization to run (alternative to ID)'
+        )
+        parser.add_argument(
+            '--optimizer',
+            type=str,
+            choices=list(OPTIMIZERS),
+            help='Optimizer to use (saved on the optimization). Defaults to the one already selected.'
         )
 
     def handle(self, *args, **options):
@@ -43,6 +51,11 @@ class Command(BaseCommand):
                 optimization = Optimization.objects.get(id=optimization_id)
                 self.stdout.write(f'Running optimization: {optimization.name} (ID: {optimization_id})')
 
+            if options.get('optimizer'):
+                optimization.optimizer = options['optimizer']
+                optimization.save(update_fields=['optimizer'])
+            self.stdout.write(f'Optimizer: {optimization.get_optimizer_display()}')
+
             # Run the optimization
             self.stdout.write('Starting optimization calculation...')
             result = run_optimization(optimization_id)
@@ -58,8 +71,13 @@ class Command(BaseCommand):
             
             if result.optimization_data:
                 data = result.optimization_data
-                self.stdout.write(f'\nLSQR Iterations: {data.get("lsqr_iterations", "N/A")}')
-                self.stdout.write(f'Coordinate Descent Iterations: {data.get("coordinate_descent_iterations", "N/A")}')
+                self.stdout.write('')
+                if 'solver_status' in data:
+                    self.stdout.write(f'Solver Status: {data["solver_status"]}')
+                if 'lsqr_iterations' in data:
+                    self.stdout.write(f'LSQR Iterations: {data["lsqr_iterations"]}')
+                if 'coordinate_descent_iterations' in data:
+                    self.stdout.write(f'Coordinate Descent Iterations: {data["coordinate_descent_iterations"]}')
                 self.stdout.write(f'Number of Runs Optimized: {data.get("num_runs_optimized", "N/A")}')
                 self.stdout.write(f'Total Wasted Energy: {data.get("total_wasted_energy", 0):.2f} kWh')
                 

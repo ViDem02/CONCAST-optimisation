@@ -37,10 +37,19 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE =  env('SESSION_EXPIRE_AT_BROWSER_CLOSE')
 WSGI_APPLICATION = 'CV.wsgi.application'
 SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 DEBUG = env('DEBUG')
+
+# Keys that are published in this repository (env examples / old commits) must never run in production
+PUBLIC_SECRET_KEYS = {
+    '4toiijiojijo9ijo@@£w',
+    'your-secret-key-change-in-production',
+    'write here the key',
+}
+if not DEBUG and SECRET_KEY in PUBLIC_SECRET_KEYS:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('DJANGO_SECRET_KEY is a publicly known value: set a new random key')
 ALLOWED_HOSTS = env('ALLOWED_HOSTS', default="127.0.0.1 localhost").split()
 
 CSRF_TRUSTED_ORIGINS = env('CSRF_TRUSTED_ORIGINS', default="http://localhost:8000 http://localhost:3000").split()
-CORS_ORIGIN_WHITELIST = CSRF_TRUSTED_ORIGINS
 
 # Application definition
 
@@ -164,8 +173,11 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 100,
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'simulator_project.authentication.SessionAuthentication',
+    ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
     ],
 }
 
@@ -188,3 +200,11 @@ CORS_ALLOW_CREDENTIALS = True
 # CORS_ALLOW_ALL_ORIGINS = True
 
 
+# HTTPS hardening: enable with USE_HTTPS=True when the app is served over TLS
+# (e.g. behind a TLS-terminating reverse proxy that sets X-Forwarded-Proto)
+if env.bool('USE_HTTPS', default=False):
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365

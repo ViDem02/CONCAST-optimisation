@@ -5,7 +5,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from .models import Optimization
 from .serializers import OptimizationSerializer, OptimizationDetailSerializer
-from .optimizer import run_optimization
+from .optimizer_packager import run_optimization
 
 
 class OptimizationViewSet(viewsets.ModelViewSet):

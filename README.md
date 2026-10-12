@@ -17,7 +17,7 @@ This project contains a complete Docker Compose setup for the CONCAST Simulator 
    ```bash
    cp .compose.env.example .compose.env
    ```
-   Edit `.env` and update the following:
+   Edit `.compose.env` and update the following:
    - `DJANGO_SECRET_KEY`: Generate a secure secret key
    - `DB_ROOT_PASSWORD`: Set a secure root password for MariaDB
    - `DB_PASSWORD`: Set a secure password for the application database user
@@ -38,10 +38,10 @@ This project contains a complete Docker Compose setup for the CONCAST Simulator 
    ```
 
 5. **Access the application**
-   - Frontend: http://localhost:3000
-   - Backend API: http://localhost:8000/api/
+   - Frontend: http://localhost:3000 (log in through the admin page when asked: the API requires authentication)
+   - Backend API: http://localhost:8000/api/ (reachable from this machine only)
    - Admin Panel: http://localhost:8000/admin/
-   - Database: localhost:3306
+   - The database is reachable only from the other containers.
 
 
 .dev.env is needed for local development without docker-compose.
@@ -52,20 +52,21 @@ The application consists of three main services:
 
 ### 1. Database (MariaDB)
 - Container: `concast_db`
-- Port: 3306
+- Port: 3306 (internal to the Docker network)
 - Volume: `concast_mariadb_data` (persistent data storage)
 - Healthcheck: Ensures database is ready before backend starts
 
 ### 2. Backend (Django)
 - Container: `concast_backend`
-- Port: 8000
-- Framework: Django 4.2 with Django REST Framework
+- Port: 8000 (bound to 127.0.0.1)
+- Framework: Django 5.2 with Django REST Framework
 - WSGI Server: Gunicorn with 3 workers
 - Volumes:
   - `media_files`: User-uploaded files
   - `static_files`: Static assets (CSS, JS, images)
 - Features:
   - REST API for production simulations
+  - Production-shift optimization, with a choice of optimizers
   - Chiller optimization
   - Cost calculations
   - Admin interface
@@ -80,6 +81,11 @@ The application consists of three main services:
   - Chiller simulations viewer
   - Optimization results viewer
   - Interactive charts with Recharts
+
+## Documentation
+
+See [docs/README.md](docs/README.md) for the full documentation map, including the
+[mathematical specification of the problem](docs/specification/mathematical-specification.pdf).
 
 ## Workflow
 

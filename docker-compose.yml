@@ -6,14 +6,12 @@ services:
     container_name: concast_db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD}
       MYSQL_DATABASE: ${DB_NAME:-concast_db}
       MYSQL_USER: ${DB_USER:-concast_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-concast_password}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
     volumes:
       - mariadb_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -33,23 +31,24 @@ services:
              python manage.py collectstatic --noinput &&
              gunicorn simulator_project.wsgi:application --bind 0.0.0.0:8000 --workers 3"
     environment:
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-your-secret-key-change-in-production}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
       - DEBUG=${DEBUG:-False}
       - IS_DOCKER=1
       - DB_NAME=${DB_NAME:-concast_db}
       - DB_USER=${DB_USER:-concast_user}
-      - DB_PASSWORD=${DB_PASSWORD:-concast_password}
+      - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
       - DB_HOST=db
       - DB_PORT=3306
       - MEDIA_ROOT=/app/media
       - SESSION_EXPIRE_AT_BROWSER_CLOSE=False
       - ALLOWED_HOSTS=backend localhost 127.0.0.1
+      - USE_HTTPS=${USE_HTTPS:-False}
     volumes:
       - ./backend:/app
       - media_files:/app/media
       - static_files:/app/staticfiles
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
