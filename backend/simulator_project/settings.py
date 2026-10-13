@@ -17,15 +17,19 @@ import os
 
 env = environ.Env(
     # set casting, default value
-    DEBUG=(bool, False)
+    DEBUG=(bool, False),
+    SESSION_EXPIRE_AT_BROWSER_CLOSE=(bool, False),
 )
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 MEDIA_URL = '/media/'
-MEDIA_ROOT = env("MEDIA_ROOT")   # absolute path for Docker
-STATIC_ROOT = BASE_DIR / 'productionfiles'
+MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / 'media'))
 TIME_ZONE = 'Europe/Rome'
+
+# Address of the results website, used by the links in the admin pages.
+# Empty when the website and the admin share the same address (Docker setup).
+FRONTEND_URL = env('FRONTEND_URL', default='')
 
 
 # Ensure files are readable by the web server
@@ -33,8 +37,7 @@ FILE_UPLOAD_PERMISSIONS = 0o644
 FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
 
 
-SESSION_EXPIRE_AT_BROWSER_CLOSE =  env('SESSION_EXPIRE_AT_BROWSER_CLOSE')
-WSGI_APPLICATION = 'CV.wsgi.application'
+SESSION_EXPIRE_AT_BROWSER_CLOSE = env('SESSION_EXPIRE_AT_BROWSER_CLOSE')
 SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 DEBUG = env('DEBUG')
 
@@ -88,7 +91,7 @@ ROOT_URLCONF = 'simulator_project.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -106,27 +109,20 @@ WSGI_APPLICATION = 'simulator_project.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-if env('IS_DOCKER')=='1':
-    DATABASES =  {
-        "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": env("DB_NAME"),
-        "USER": env("DB_USER"),
-        "PASSWORD": env("DB_PASSWORD"),
-        "HOST": env("DB_HOST"),
-        "PORT": env("DB_PORT"),
-        "TEST": {
-            "NAME": "test_django_db",
+# SQLite: a single file, no database server to install or start.
+# In Docker the file lives in the persistent /data volume (SQLITE_PATH).
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': env('SQLITE_PATH', default=str(BASE_DIR / 'db.sqlite3')),
+        'OPTIONS': {
+            # Let the web workers read while a calculation writes
+            'init_command': 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;',
+            'transaction_mode': 'IMMEDIATE',
+            'timeout': 30,
         },
-        }
     }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
+}
     
 
 # Password validation

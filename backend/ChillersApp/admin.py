@@ -1,195 +1,110 @@
-from django.contrib import admin
-from django.contrib import messages
-from django.utils.html import format_html
+import csv
+import re
+from datetime import datetime
 
-from .models import Chiller, ChillerSimulation
+from django.contrib import admin, messages
+from django.http import HttpResponse
+from django.utils.html import format_html, format_html_join
+
+from simulator_project.admin_tools import RunButtonMixin, frontend_link
 from .chiller_control import run_chiller_simulation
+from .models import Chiller, ChillerSimulation
 
 
 @admin.register(Chiller)
 class ChillerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'insulation_u_value', 'surface_area', 'created_at']
+    list_display = ['name', 'surface_area', 'insulation_u_value', 'nominal_capacity_kW']
     search_fields = ['name']
-    list_filter = ['created_at']
-    ordering = ['-created_at']
+    fieldsets = [
+        (None, {'fields': ['name']}),
+        ('Room', {'fields': ['surface_area', 'insulation_u_value']}),
+        ('Refrigeration unit', {'fields': ['nominal_capacity_kW', 'nominal_cooling_rate', 'chiller_efficiency']}),
+    ]
 
 
 @admin.register(ChillerSimulation)
-class ChillerSimulationAdmin(admin.ModelAdmin):
-    list_display = [
-        'name', 'chiller', 'start_date', 'end_date',
-        'temperature_range', 'has_results', 'created_at'
-    ]
+class ChillerSimulationAdmin(RunButtonMixin, admin.ModelAdmin):
+    list_display = ['name', 'chiller', 'start_date', 'end_date', 'temperature_range', 'calculated']
+    list_select_related = ['chiller']
     search_fields = ['name', 'chiller__name']
-    list_filter = ['start_date', 'end_date', 'created_at']
     ordering = ['-created_at']
-    
+    save_as = True  # "Save as new" to try other settings on a copy
+
     fieldsets = (
-        ('Basic Information', {
+        (None, {
             'fields': ('name', 'chiller', 'start_date', 'end_date')
         }),
-        ('Temperature Control', {
-            'fields': (
-                'min_temperature', 'max_temperature', 
-                'initial_window_hours', 'target_temperature'
-            )
+        ('Temperature to keep', {
+            'fields': ('min_temperature', 'max_temperature', 'target_temperature')
         }),
-        ('Datasets', {
-            'fields': (
-                'generation_dataset', 'prices_dataset', 
-                'temperature_dataset'
-            )
+        ('Energy', {
+            'fields': ('generation_dataset', 'production_plan_result', 'allow_grid_power', 'temperature_dataset')
         }),
-        ('PD Controller Parameters', {
-            'fields': ('proportional_gain', 'derivative_gain')
+        ('Controller tuning (advanced)', {
+            'fields': ('minimum_runtime_minutes', 'initial_window_hours', 'proportional_gain', 'derivative_gain'),
+            'classes': ('collapse',),
         }),
-        ('Production Plan Integration (Optional)', {
-            'fields': ('production_plan_result',),
-            'description': 'Link to a production plan result. If set, available generation will be the wasted energy from that production plan instead of full generation from datasets.'
+        ('Result', {
+            'fields': ('result',),
         }),
-        ('Results (Read-Only)', {
-            'fields': ('display_results_summary',),
-            'classes': ('collapse',)
-        })
     )
-    
-    readonly_fields = ['display_results_summary']
-    
-    actions = ['run_simulation', 'export_to_csv']
-    
-    def save_as_new(self, request, obj):
-        """Override save_as_new to customize behavior"""
-        pass
-    
-    def change_view(self, request, object_id, form_url='', extra_context=None):
-        """Add 'Save as new' button in change view"""
-        extra_context = extra_context or {}
-        extra_context['show_save_as_new'] = True
-        return super().change_view(request, object_id, form_url, extra_context=extra_context)
-    
-    save_as = True  # Enable 'Save as new' functionality
-    
+    readonly_fields = ['result']
+    actions = ['run_selected', 'export_to_csv']
+
+    def clear_results(self, obj):
+        return ChillerSimulation.objects.filter(pk=obj.pk, calculated_temperature__isnull=False).update(
+            chiller_power_delivery=None, calculated_temperature=None) > 0
+
+    def run_object(self, obj):
+        simulation = run_chiller_simulation(obj.pk)
+        power = simulation.chiller_power_delivery
+        return (f'"{obj.name}" calculated: {power["total_cooling_kWh"]:,.0f} kWh used by the cold room, '
+                f'{power["total_grid_consumption_kWh"]:,.0f} kWh of it from the grid.')
+
+    @admin.display(description='Allowed temperature')
     def temperature_range(self, obj):
-        """Display temperature range."""
-        return f"{obj.min_temperature}°C - {obj.max_temperature}°C"
-    temperature_range.short_description = 'Temp Range'
-    
-    def has_results(self, obj):
-        """Check if simulation has results."""
-        has_data = bool(obj.chiller_power_delivery and obj.calculated_temperature)
-        if has_data:
-            return format_html('<span style="color: green;">✓</span>')
-        return format_html('<span style="color: gray;">✗</span>')
-    has_results.short_description = 'Results'
-    
-    def display_results_summary(self, obj):
-        """Display summary of simulation results."""
-        if not obj.chiller_power_delivery or not obj.calculated_temperature:
-            return "No results yet. Run simulation to generate results."
-        
-        power_data = obj.chiller_power_delivery
-        temp_data = obj.calculated_temperature
-        
-        html = f"""
-        <div style="font-family: monospace; line-height: 1.6;">
-            <h3>Temperature Results:</h3>
-            <ul>
-                <li>Min: {temp_data.get('min_temp', 'N/A'):.2f}°C</li>
-                <li>Max: {temp_data.get('max_temp', 'N/A'):.2f}°C</li>
-                <li>Average: {temp_data.get('avg_temp', 'N/A'):.2f}°C</li>
-                <li>Target: {temp_data.get('target_temp', 'N/A'):.2f}°C</li>
-            </ul>
-            
-            <h3>Power Consumption:</h3>
-            <ul>
-                <li>Total Cooling Energy: {power_data.get('total_cooling_kWh', 'N/A'):.2f} kWh</li>
-                <li>Grid Consumption: {power_data.get('total_grid_consumption_kWh', 'N/A'):.2f} kWh</li>
-                <li>Wasted Energy: {power_data.get('total_wasted_kWh', 'N/A'):.2f} kWh</li>
-            </ul>
-        </div>
-        """
-        return format_html(html)
-    display_results_summary.short_description = 'Results Summary'
-    
-    @admin.action(description='Run chiller simulation with PD control')
-    def run_simulation(self, request, queryset):
-        """Run chiller simulation for selected simulations."""
-        success_count = 0
-        error_count = 0
-        
-        for simulation in queryset:
-            try:
-                run_chiller_simulation(simulation.id)
-                success_count += 1
-                self.message_user(
-                    request,
-                    f"Successfully ran simulation '{simulation.name}'",
-                    level=messages.SUCCESS
-                )
-            except Exception as e:
-                error_count += 1
-                self.message_user(
-                    request,
-                    f"Error running simulation '{simulation.name}': {str(e)}",
-                    level=messages.ERROR
-                )
-        
-        if success_count > 0:
-            self.message_user(
-                request,
-                f"Completed {success_count} simulation(s)",
-                level=messages.SUCCESS
-            )
-        if error_count > 0:
-            self.message_user(
-                request,
-                f"Failed {error_count} simulation(s)",
-                level=messages.ERROR
-            )
-    
-    @admin.action(description='Export simulation results to CSV')
-    def export_to_csv(self, request, queryset):
-        """Export selected simulation results to CSV file."""
-        import csv
-        from django.http import HttpResponse
-        
-        # Check if any simulations have results
-        simulations_with_results = [
-            sim for sim in queryset 
-            if sim.chiller_power_delivery and sim.calculated_temperature
+        return f"{obj.min_temperature}°C to {obj.max_temperature}°C"
+
+    @staticmethod
+    def has_results(obj):
+        return bool(obj.chiller_power_delivery and obj.calculated_temperature)
+
+    @admin.display(description='Calculated', boolean=True)
+    def calculated(self, obj):
+        return self.has_results(obj)
+
+    @admin.display(description='Result')
+    def result(self, obj):
+        if not obj.pk or not self.has_results(obj):
+            return 'Not calculated yet: press "Save and calculate".'
+        temperature = obj.calculated_temperature
+        power = obj.chiller_power_delivery
+        rows = [
+            ('Room temperature (min / average / max)',
+             f"{temperature['min_temp']:.1f} / {temperature['avg_temp']:.1f} / {temperature['max_temp']:.1f} °C"),
+            ('Electricity used by the cold room', f"{power['total_cooling_kWh']:,.0f} kWh"),
+            ('of which bought from the grid', f"{power['total_grid_consumption_kWh']:,.0f} kWh"),
+            ('Generation still left unused', f"{power['total_wasted_kWh']:,.0f} kWh"),
         ]
-        
-        if not simulations_with_results:
-            self.message_user(
-                request,
-                "No simulations with results found. Run simulations first.",
-                level=messages.WARNING
-            )
-            return
-        
-        # If multiple simulations, export the first one with a warning
-        if len(simulations_with_results) > 1:
-            self.message_user(
-                request,
-                f"Exporting only the first simulation: {simulations_with_results[0].name}",
-                level=messages.INFO
-            )
-        
+        table = format_html_join('', '<tr><th>{}</th><td>{}</td></tr>', rows)
+        return format_html('<div class="sparc-result"><table>{}</table><p>{}</p></div>',
+                           table, frontend_link(f'cold-rooms/{obj.pk}', 'Show the charts'))
+
+    @admin.action(description='Download the results as CSV (one simulation)')
+    def export_to_csv(self, request, queryset):
+        """Export the results of one simulation to a CSV file."""
+        simulations_with_results = [sim for sim in queryset if self.has_results(sim)]
+        if len(simulations_with_results) != 1:
+            self.message_user(request, 'Select exactly one calculated simulation to download.',
+                              level=messages.WARNING)
+            return None
+
         simulation = simulations_with_results[0]
-        
-        # Create HTTP response with CSV content
-        # Sanitize filename by removing invalid characters
-        import re
-        filename = str(simulation)
-        filename = re.sub(r'[^\w\s-]', '_', filename)
-        filename = re.sub(r'[-\s]+', '_', filename)
-        
+        filename = re.sub(r'[-\s]+', '_', re.sub(r'[^\w\s-]', '_', str(simulation)))
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
-        
+
         writer = csv.writer(response)
-        
-        # Write header
         writer.writerow([
             'time',
             'pw_used_by_chiller_from_generated_sources',
@@ -200,32 +115,19 @@ class ChillerSimulationAdmin(admin.ModelAdmin):
             'chiller_actual_temp',
             'outside_temp_c'
         ])
-        
-        # Write data
+
         temp_data = simulation.calculated_temperature
         power_data = simulation.chiller_power_delivery
-        
-        from datetime import datetime
+        outside = temp_data.get('outside_temperature_C') or [''] * len(temp_data['timestamps'])
         for i, timestamp in enumerate(temp_data['timestamps']):
-            # Parse ISO format and convert to desired format
-            dt = datetime.fromisoformat(timestamp)
-            formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M')
-            
             writer.writerow([
-                formatted_timestamp,
-                power_data['power_kW'][i],
+                datetime.fromisoformat(timestamp).strftime('%Y-%m-%d %H:%M'),
+                power_data['power_kW'][i] - power_data['grid_consumption_kW'][i],
                 power_data['grid_consumption_kW'][i],
                 simulation.max_temperature,
                 simulation.min_temperature,
-                temp_data.get('target_temp', simulation.min_temperature + (simulation.max_temperature - simulation.min_temperature) / 2),
+                temp_data.get('target_temp'),
                 temp_data['temperature_C'][i],
-                temp_data.get('outside_temperature_C', [None] * len(temp_data['timestamps']))[i] if 'outside_temperature_C' in temp_data else ''
+                outside[i],
             ])
-        
-        self.message_user(
-            request,
-            f"Exported simulation '{simulation.name}' to CSV",
-            level=messages.SUCCESS
-        )
-        
         return response

@@ -1,138 +1,98 @@
 # SPARC - Simulation, Production Analysis & Refrigeration Control
 
-This project contains a complete Docker Compose setup for the CONCAST Simulator application with Django backend, React frontend, and MariaDB database.
+<img src="./logo/SPARC%20logo.png" alt="SPARC logo" width="200"/>
 
-<img src="./logo/SPARC%20logo.png" alt="drawing" width="200"/>
+SPARC helps CONCAST buy less electricity from the grid. It moves the flexible production shifts
+(within the minutes each shift is allowed to move) to the hours when the solar panels and the
+cogenerator produce, or when electricity is cheaper, and shows how much this saves. It also
+simulates cold rooms that cool with the surplus on-site production.
 
-## Prerequisites
+## Start SPARC (no technical knowledge needed)
 
-- Docker Engine 20.10 or higher
-- Docker Compose 2.0 or higher
+1. Install **Docker Desktop** once: <https://www.docker.com/products/docker-desktop/> (check its
+   licence terms with IT: it is free only for smaller companies; on a Linux server the free Docker
+   Engine works too).
+2. Download this folder (on GitHub: green "Code" button → "Download ZIP", then unzip it).
+3. Double-click:
+   - **Mac**: `start.command` (the first time, right-click → Open, then confirm);
+   - **Windows**: `start.bat`;
+   - **Linux**: run `./start.command` in a terminal.
+4. Your browser opens <http://localhost:3000>. Log in with user **admin**, password **sparc**,
+   then change the password (top right of the "Manage data" pages: "Change password").
 
-## Quick Start
+The very first start prepares SPARC and takes a few minutes; afterwards it starts in seconds.
+The CONCAST data (generation, prices, temperatures and the reference production week) are
+already loaded, with one example optimisation and one example cost simulation.
 
-1. **Clone the repository**
+To stop SPARC, double-click `stop.command` (Mac) or `stop.bat` (Windows). Your data are kept
+between starts.
 
-2. **Configure environment variables**
-   ```bash
-   cp .compose.env.example .compose.env
-   ```
-   Edit `.compose.env` and update the following:
-   - `DJANGO_SECRET_KEY`: Generate a secure secret key
-   - `DB_ROOT_PASSWORD`: Set a secure root password for MariaDB
-   - `DB_PASSWORD`: Set a secure password for the application database user
-   - `DEBUG`: Set to `True` for development, `False` for production
+## Using SPARC
 
-   ```bash
-   source .compose.env
-   ```
+The website has two parts:
 
-3. **Build and start the containers**
-   ```bash
-   docker-compose up -d --build
-   ```
+- **Results** (<http://localhost:3000>): the home page explains the steps; *Optimisations*,
+  *Cost simulations* and *Cold rooms* show results and charts; *Production plans* shows each
+  week as a chart. Items that are not calculated yet have a **Calculate now** button.
+- **Manage data** (<http://localhost:3000/admin/>): where data are uploaded and calculations are
+  set up. Every calculation page has a **Save and calculate** button; the result appears on the
+  same page, with a link to its charts.
 
-4. **Create a Django superuser** (first time only)
-   ```bash
-   docker-compose exec backend python manage.py createsuperuser
-   ```
+The usual workflow:
 
-5. **Access the application**
-   - Frontend: http://localhost:3000 (log in through the admin page when asked: the API requires authentication)
-   - Backend API: http://localhost:8000/api/ (reachable from this machine only)
-   - Admin Panel: http://localhost:8000/admin/
-   - The database is reachable only from the other containers.
+1. **Input data**: upload hourly CSV files (on-site generation, electricity prices, outside
+   temperature). The upload page shows the expected columns and checks the file; the list shows
+   which dates each dataset covers.
+2. **Production plans**: import a week from a CSV timetable and a YAML file ("Import from CSV +
+   YAML"), then, per process, set how many minutes each shift may start earlier or later.
+3. **Shift optimisation**: choose a plan, the Monday of a reference week and the data, then
+   *Save and optimise*. A new plan with the moved shifts is created.
+4. **Cost simulation**: compare the current and the optimised plan over a longer period (the
+   optimisation page has a link that pre-fills it). This shows whether the savings found on one
+   week hold on the others.
 
+### File formats
 
-.dev.env is needed for local development without docker-compose.
+Hourly data (one row per hour, no missing hours):
 
-## Architecture
-
-The application consists of three main services:
-
-### 1. Database (MariaDB)
-- Container: `concast_db`
-- Port: 3306 (internal to the Docker network)
-- Volume: `concast_mariadb_data` (persistent data storage)
-- Healthcheck: Ensures database is ready before backend starts
-
-### 2. Backend (Django)
-- Container: `concast_backend`
-- Port: 8000 (bound to 127.0.0.1)
-- Framework: Django 5.2 with Django REST Framework
-- WSGI Server: Gunicorn with 3 workers
-- Volumes:
-  - `media_files`: User-uploaded files
-  - `static_files`: Static assets (CSS, JS, images)
-- Features:
-  - REST API for production simulations
-  - Production-shift optimization, with a choice of optimizers
-  - Chiller optimization
-  - Cost calculations
-  - Admin interface
-
-### 3. Frontend (React)
-- Container: `concast_frontend`
-- Port: 3000 (mapped to port 80 in container)
-- Build: Multi-stage Docker build with Vite
-- Server: Nginx
-- Features:
-  - Production simulations viewer
-  - Chiller simulations viewer
-  - Optimization results viewer
-  - Interactive charts with Recharts
-
-
-
-## Examples of file
-
-Generation Dataset 
 ```csv
 Time,cogen_kWh,solar_kWh
-2024-01-01 00:00:00,0,0
-2024-01-01 01:00:00,0,0
-2024-01-01 02:00:00,0,0
-...
+2024-01-01 00:00:00,350,0
 ```
-
-Prices Dataset
 ```csv
-Time,electricity_price,methane_prices
-2024-01-01 00:00:00,0.18325,0.04958
-2024-01-01 01:00:00,0.18025,0.04958
-2024-01-01 02:00:00,0.17625,0.04958
-2024-01-01 03:00:00,0.16195,0.04958
-2024-01-01 04:00:00,0.16125,0.04958
-````
-In this CSV the methane_prices column could be left at 0 as it is not used in the current version of the simulator.
-
-
-
-Temperature Dataset
+Time,electricity_price
+2024-01-01 00:00:00,0.18325
+```
 ```csv
 Time,outside_temperature
 2024-01-01 00:00:00,6.8
-2024-01-01 01:00:00,5.9
-2024-01-01 02:00:00,6.1
-2024-01-01 03:00:00,5.5
-2024-01-01 04:00:00,5.6
-2024-01-01 05:00:00,4.7
-2024-01-01 06:00:00,3.8
-2024-01-01 07:00:00,3.5
 ```
 
+Production plan: a CSV timetable with one 0/1 column per process, one row every 15 minutes from
+Monday 00:00 to Sunday 23:45, and a YAML file with the power and allowed movement of each process
+(see `data/production_timetable.csv` and `data/production.yaml`).
 
-Production Plan
-```csv
-Time,s_finit,s_torre,s_hiro,b_past,b_burr,b_conf
-2025-09-22 00:00:00,1,0,0,0,0,0
-2025-09-22 00:15:00,1,0,0,0,0,0
-2025-09-22 00:30:00,1,0,0,0,0,0
-2025-09-22 00:45:00,1,0,0,0,0,0
-```
+## Settings
 
-Each column represents a process. The values are either 0 or 1, indicating whether the process is inactive or active at that time.
-The time intervals must be in 15-minute increments and they must go from a Monday to a Sunday (7 days).
+Optional settings go in a file called `.env` next to `docker-compose.yml` (copy `.env.example`):
+the port (default 3000), whether other computers of the network may open SPARC (default: only
+this computer) and the first login. To start again from an empty database with the example data,
+run `docker compose down -v` and start SPARC again (this deletes everything entered).
+
+## For developers
+
+- `docker-compose.yml` runs two containers: **backend** (Django 5.2 + Django REST Framework,
+  Gunicorn, SQLite database in the `sparc_data` volume) and **frontend** (React + Vite, served
+  by nginx, which also forwards `/api`, `/admin` and `/static` to the backend). Only the frontend
+  port is published.
+- On every start the backend applies the migrations and runs `manage.py setup_sparc`, which
+  creates the first login and, when the database is empty, loads `data/` and calculates the
+  examples.
+- Backend documentation: [backend/README.md](backend/README.md). Frontend: [frontend/README.md](frontend/README.md).
+- Tests: `cd backend && DJANGO_SECRET_KEY=dev DEBUG=True python manage.py test`.
+- Local development without Docker: `.dev.env.example` (backend on port 8000, `npm run dev` for
+  the frontend on port 3000, which proxies the backend; set `FRONTEND_URL=http://localhost:3000`
+  so that the admin links to the charts).
 
 ## License
 

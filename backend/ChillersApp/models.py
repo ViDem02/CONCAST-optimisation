@@ -34,6 +34,7 @@ class Chiller(models.Model):
     
     class Meta:
         ordering = ['name']
+        verbose_name = 'cold room'
     
     def __str__(self):
         return f"{self.name} (U={self.insulation_u_value}, A={self.surface_area}m²)"
@@ -46,38 +47,43 @@ class ChillerSimulation(models.Model):
     chiller = models.ForeignKey(
         Chiller,
         on_delete=models.CASCADE,
-        related_name='simulations'
+        related_name='simulations',
+        verbose_name='cold room'
     )
     max_temperature = models.IntegerField(
-        help_text="Maximum temperature to maintain (°C)",
+        verbose_name='maximum temperature (°C)',
+        help_text="The room must not get warmer than this",
         validators=[MinValueValidator(-50)]
     )
     min_temperature = models.IntegerField(
-        help_text="Minimum temperature to maintain (°C)",
+        verbose_name='minimum temperature (°C)',
+        help_text="The room must not get colder than this",
         validators=[MinValueValidator(-50)]
     )
     target_temperature = models.FloatField(
         null=True,
         blank=True,
-        help_text="Target temperature (°C). If not set, defaults to midpoint of min/max range.",
+        verbose_name='target temperature (°C)',
+        help_text="Temperature the controller aims for. Leave empty to use the middle of the allowed range",
         validators=[MinValueValidator(-50)]
     )
-    start_date = models.DateField(help_text="Simulation start date")
-    end_date = models.DateField(help_text="Simulation end date")
+    start_date = models.DateField(help_text="First day of the simulation")
+    end_date = models.DateField(help_text="Last day of the simulation (included)")
     initial_window_hours = models.IntegerField(
-        help_text="Initial window of time in hours",
+        verbose_name='start-up period (hours)',
+        help_text="Hours at the start during which the temperature may still be outside the allowed range",
         validators=[MinValueValidator(0)],
         default=0
     )
     
     # PD Controller parameters
     proportional_gain = models.FloatField(
-        help_text="Proportional gain (Kp) for PD controller",
+        help_text="Proportional gain (Kp) of the PD controller: higher reacts faster, but may overshoot",
         validators=[MinValueValidator(0)],
         default=2.0
     )
     derivative_gain = models.FloatField(
-        help_text="Derivative gain (Kd) for PD controller",
+        help_text="Derivative gain (Kd) of the PD controller: higher damps oscillations",
         validators=[MinValueValidator(0)],
         default=0.5
     )
@@ -85,13 +91,15 @@ class ChillerSimulation(models.Model):
     # Grid power options
     allow_grid_power = models.BooleanField(
         default=True,
-        help_text="Allow using grid electricity. If False, chiller will only use available renewable generation."
+        verbose_name='allow buying from the grid',
+        help_text="Untick to cool only with on-site generation (the temperature may then leave the allowed range)"
     )
     
     # Minimum runtime constraint
     minimum_runtime_minutes = models.IntegerField(
         default=0,
-        help_text="Minimum runtime in minutes when chiller is turned on. Prevents rapid on/off cycling. 0 = no constraint.",
+        verbose_name='minimum runtime (min)',
+        help_text="Once started, the unit runs at least this long, to avoid frequent on/off cycles (0 = no minimum)",
         validators=[MinValueValidator(0)]
     )
     
@@ -102,7 +110,9 @@ class ChillerSimulation(models.Model):
         null=True,
         blank=True,
         related_name='chiller_simulations',
-        help_text="Optional: Link to production plan. If set, available generation = wasted energy from production plan"
+        verbose_name='use surplus of cost simulation',
+        help_text="Optional: if set, the cold room only uses the generation left unused by the production "
+                  "in that cost simulation (same dates required) instead of the full generation"
     )
     
     # Dataset selection (used when production_plan_result is not set)
@@ -111,15 +121,8 @@ class ChillerSimulation(models.Model):
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        help_text="Generation dataset to use for simulation (if not using production plan result)"
-    )
-    
-    prices_dataset = models.ForeignKey(
-        'DatasetApp.PricesDataset',
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        help_text="Prices dataset to use for simulation"
+        verbose_name='on-site generation',
+        help_text="Solar and cogeneration data (needed unless a cost simulation is linked)"
     )
     
     temperature_dataset = models.ForeignKey(
@@ -127,7 +130,8 @@ class ChillerSimulation(models.Model):
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        help_text="Temperature dataset to use for simulation"
+        verbose_name='outside temperature',
+        help_text="Outside temperature data"
     )
     
     # Results fields (populated after simulation)
@@ -147,6 +151,20 @@ class ChillerSimulation(models.Model):
     
     class Meta:
         ordering = ['-created_at']
+        verbose_name = 'cold-room simulation'
+    
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        errors = {}
+        if self.min_temperature is not None and self.max_temperature is not None \
+                and self.min_temperature >= self.max_temperature:
+            errors['max_temperature'] = 'The maximum temperature must be above the minimum temperature'
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            errors['end_date'] = 'The last day must not be before the first day'
+        if not self.production_plan_result_id and not self.generation_dataset_id:
+            errors['generation_dataset'] = 'Choose the on-site generation data (or link a cost simulation below)'
+        if errors:
+            raise ValidationError(errors)
     
     def __str__(self):
         return f"{self.name} - {self.chiller.name} ({self.start_date} to {self.end_date})"

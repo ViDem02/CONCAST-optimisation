@@ -1,9 +1,34 @@
+from django.db.models import Count, Max, Min
 from rest_framework import serializers
 from .models import (
     TemperatureDataset, TemperatureRecord,
     PricesDataset, PricesRecord,
     GenerationDataset, GenerationRecord
 )
+
+
+class DatasetSummaryMixin(serializers.Serializer):
+    """Number of hourly records and dates covered, instead of every record."""
+    record_count = serializers.SerializerMethodField()
+    first_timestamp = serializers.SerializerMethodField()
+    last_timestamp = serializers.SerializerMethodField()
+
+    def _summary(self, obj):
+        if not hasattr(obj, '_summary'):
+            obj._summary = obj.records.aggregate(n=Count('id'), first=Min('timestamp'), last=Max('timestamp'))
+        return obj._summary
+
+    def get_record_count(self, obj):
+        return self._summary(obj)['n']
+
+    def get_first_timestamp(self, obj):
+        return self._summary(obj)['first']
+
+    def get_last_timestamp(self, obj):
+        return self._summary(obj)['last']
+
+
+DATASET_FIELDS = ['id', 'name', 'record_count', 'first_timestamp', 'last_timestamp', 'created_at', 'updated_at']
 
 
 class TemperatureRecordSerializer(serializers.ModelSerializer):
@@ -13,28 +38,24 @@ class TemperatureRecordSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
-class TemperatureDatasetSerializer(serializers.ModelSerializer):
-    records = TemperatureRecordSerializer(many=True, read_only=True)
-    
+class TemperatureDatasetSerializer(DatasetSummaryMixin, serializers.ModelSerializer):
     class Meta:
         model = TemperatureDataset
-        fields = ['id', 'is_active', 'name', 'records', 'created_at', 'updated_at']
+        fields = DATASET_FIELDS
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
 class PricesRecordSerializer(serializers.ModelSerializer):
     class Meta:
         model = PricesRecord
-        fields = ['id', 'prices_dataset', 'timestamp', 'electricity_price', 'methane_price']
+        fields = ['id', 'prices_dataset', 'timestamp', 'electricity_price']
         read_only_fields = ['id']
 
 
-class PricesDatasetSerializer(serializers.ModelSerializer):
-    records = PricesRecordSerializer(many=True, read_only=True)
-    
+class PricesDatasetSerializer(DatasetSummaryMixin, serializers.ModelSerializer):
     class Meta:
         model = PricesDataset
-        fields = ['id', 'is_active', 'name', 'records', 'created_at', 'updated_at']
+        fields = DATASET_FIELDS
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 
@@ -45,10 +66,8 @@ class GenerationRecordSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
-class GenerationDatasetSerializer(serializers.ModelSerializer):
-    records = GenerationRecordSerializer(many=True, read_only=True)
-    
+class GenerationDatasetSerializer(DatasetSummaryMixin, serializers.ModelSerializer):
     class Meta:
         model = GenerationDataset
-        fields = ['id', 'is_active', 'name', 'records', 'created_at', 'updated_at']
+        fields = DATASET_FIELDS
         read_only_fields = ['id', 'created_at', 'updated_at']

@@ -11,11 +11,10 @@ This module implements the chiller planning functionality:
 from datetime import datetime, timedelta
 import pytz
 import numpy as np
-import matplotlib.pyplot as plt
 from django.conf import settings
 from django.utils import timezone
 
-from DatasetApp.models import GenerationDataset, GenerationRecord, PricesDataset, PricesRecord, TemperatureDataset, TemperatureRecord
+from DatasetApp.models import GenerationRecord, TemperatureRecord
 from .models import ChillerSimulation, Chiller
 
 
@@ -168,11 +167,12 @@ def run_chiller_simulation(simulation_id):
     
     # Get datasets from simulation object
     generation_dataset = simulation.generation_dataset
-    prices_dataset = simulation.prices_dataset
     temperature_dataset = simulation.temperature_dataset
     
-    if not generation_dataset or not prices_dataset or not temperature_dataset:
-        raise ValueError("Generation, prices, and temperature datasets must be specified in the simulation")
+    if not temperature_dataset:
+        raise ValueError("Choose the outside temperature data of the simulation")
+    if not generation_dataset and not simulation.production_plan_result:
+        raise ValueError("Choose the on-site generation data of the simulation (or link a cost simulation)")
     
     # Get simulation time range
     tz = pytz.timezone(settings.TIME_ZONE)
@@ -186,20 +186,14 @@ def run_chiller_simulation(simulation_id):
         timestamp__lte=end_time
     ).order_by('timestamp')
     
-    prices_records = PricesRecord.objects.filter(
-        prices_dataset=prices_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
-    
     temperature_records = TemperatureRecord.objects.filter(
         temperature_dataset=temperature_dataset,
         timestamp__gte=start_time.replace(minute=0, second=0),
         timestamp__lte=end_time
     ).order_by('timestamp')
     
-    if not generation_records.exists() or not prices_records.exists() or not temperature_records.exists():
-        raise ValueError("Insufficient data coverage for simulation period")
+    if not temperature_records.exists() or (not simulation.production_plan_result and not generation_records.exists()):
+        raise ValueError("The generation or temperature data do not cover the simulation period")
     
     # Build 5-minute timestep vector
     timesteps, _ = retime_hourly_to_5min([], start_time, end_time)
@@ -212,14 +206,14 @@ def run_chiller_simulation(simulation_id):
         production_timestep_data = simulation.production_plan_result.timestep_data
         
         if not production_timestep_data or 'wasted_energy_kWh' not in production_timestep_data:
-            raise ValueError("Production plan result does not have wasted energy data")
+            raise ValueError("The linked cost simulation has no results: run it first")
         
         # Get wasted energy from production plan (in kWh per timestep)
         wasted_kWh_list = production_timestep_data['wasted_energy_kWh']
         
         # Validate timestep count matches
         if len(wasted_kWh_list) != N:
-            raise ValueError(f"Production plan timesteps ({len(wasted_kWh_list)}) don't match chiller simulation timesteps ({N})")
+            raise ValueError("The linked cost simulation must cover exactly the same dates as this simulation")
         
         # Convert from kWh to kW (production plan uses same 5-minute timesteps)
         # kWh per 5-minute timestep → kW: multiply by (60/5) = 12
@@ -237,13 +231,6 @@ def run_chiller_simulation(simulation_id):
         solar_kW = np.array(solar_5min)
         cogen_kW = np.array(cogen_5min)
         total_generation_kW = solar_kW + cogen_kW
-    
-    # Retime electricity prices
-    electricity_price_hourly = [(r.timestamp, r.electricity_price) for r in prices_records]
-    _, electricity_price_5min = retime_hourly_to_5min(
-        electricity_price_hourly, start_time, end_time, method='previous'
-    )
-    price_el = np.array(electricity_price_5min)
     
     # Retime temperature data (linear interpolation for smooth temperature changes)
     temperature_hourly = [(r.timestamp, r.outside_temperature) for r in temperature_records]
@@ -420,6 +407,8 @@ def generate_chiller_plots(simulation_id, output_dir=None):
     Returns:
         Dictionary with plot file paths or figure objects
     """
+    import matplotlib.pyplot as plt
+    
     simulation = ChillerSimulation.objects.get(id=simulation_id)
     
     if not simulation.chiller_power_delivery or not simulation.calculated_temperature:

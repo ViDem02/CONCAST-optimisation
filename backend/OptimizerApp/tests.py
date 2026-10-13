@@ -436,7 +436,7 @@ class PackagerIntegrationTests(TestCase):
                              ele_generated_by_solar_kWh=1000 if ts.weekday() == 0 and 10 <= ts.hour <= 13 else 0)
             for ts in hours)
         PricesRecord.objects.bulk_create(
-            PricesRecord(prices_dataset=cls.prices, timestamp=ts, electricity_price=0.2, methane_price=0.05)
+            PricesRecord(prices_dataset=cls.prices, timestamp=ts, electricity_price=0.2)
             for ts in hours)
 
     def create_optimization(self, optimizer):
@@ -537,6 +537,25 @@ class PackagerIntegrationTests(TestCase):
         self.assertEqual(WeeklyProductionPlan.objects.count(), plans)
         self.assertEqual(Shift.objects.filter(process__production_plan_id=plan_id).count(), len(self.ORIGINAL))
         self.assertPlanFollowsShifts(optimization)
+
+    def test_each_run_takes_the_tolerance_of_its_own_shift(self):
+        # Make only the second press shift fixed: the first one keeps its 120/60 minutes
+        Shift.objects.filter(process__production_plan=self.plan, name='second').update(
+            max_forward_minutes=0, max_backwards_minutes=0)
+        try:
+            _, problem = self.run_with_problem('milp')
+        finally:
+            Shift.objects.filter(process__production_plan=self.plan, name='second').update(
+                max_forward_minutes=120, max_backwards_minutes=60)
+        bounds = {i['run_name']: (i['max_backward_steps'], i['max_forward_steps']) for i in problem.run_info}
+        self.assertEqual(bounds, {'press_run1': (12, 24), 'press_run2': (0, 0), 'oven_run1': (0, 0)})
+
+    def test_reference_period_must_be_one_week(self):
+        optimization = self.create_optimization('milp')
+        optimization.reference_week_end = self.WEEK + timedelta(days=2)
+        optimization.save()
+        with self.assertRaisesMessage(ValueError, 'exactly one week'):
+            run_optimization(optimization.id)
 
     def test_plan_without_runs_is_rejected(self):
         empty = WeeklyProductionPlan.objects.create(name='empty')

@@ -1,0 +1,17 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .sparc-guide { padding: 0 16px 8px; margin-bottom: 20px; }
+  .sparc-guide h2 { margin: 0 -16px 8px; }
+  .sparc-guide ol { padding-left: 20px; }
+  .sparc-guide li { margin-bottom: 6px; line-height: 1.5; list-style: decimal; }
+  .sparc-run-row { justify-content: flex-start; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .sparc-run-row p { margin: 0; color: var(--body-quiet-color); }
+  .sparc-result table { margin-top: 6px; }
+  .sparc-result td, .sparc-result th { padding: 4px 10px 4px 0; }
+  .sparc-ok { color: #1b7f3b; font-weight: 600; }
+  .sparc-warn { color: #b26b00; font-weight: 600; }
+  .sparc-help pre { background: var(--darkened-bg); padding: 8px; overflow-x: auto; }
+</style>
+{% endblock %}

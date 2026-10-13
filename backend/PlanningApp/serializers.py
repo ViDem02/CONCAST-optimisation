@@ -39,17 +39,34 @@ class WeeklyProductionPlanSerializer(serializers.ModelSerializer):
 
 
 class SimulationSerializer(serializers.ModelSerializer):
-    reference_production_plan_name = serializers.CharField(
-        source='reference_production_plan.name', 
-        read_only=True
-    )
-    
+    original_production_plan_name = serializers.CharField(source='original_production_plan.name', read_only=True)
+    optimized_production_plan_name = serializers.CharField(
+        source='optimized_production_plan.name', read_only=True, allow_null=True)
+    generation_dataset_name = serializers.CharField(source='generation_dataset.name', read_only=True)
+    prices_dataset_name = serializers.CharField(source='prices_dataset.name', read_only=True)
+    results = serializers.SerializerMethodField()
+
     class Meta:
         model = Simulation
         fields = [
-            'id', 'name', 'notes', 'reference_production_plan', 
-            'reference_production_plan_name', 'start_date', 'end_date', 
-            'created_at', 'updated_at'
+            'id', 'name', 'notes',
+            'original_production_plan', 'original_production_plan_name',
+            'optimized_production_plan', 'optimized_production_plan_name',
+            'generation_dataset', 'generation_dataset_name', 'prices_dataset', 'prices_dataset_name',
+            'start_date', 'end_date', 'results', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
+    def get_results(self, obj):
+        """Summary of the results, or None if the simulation has not been calculated."""
+        results = getattr(obj, 'results', None)
+        if results is None:
+            return None
+        return {
+            'id': results.id,
+            'original_cost_euros': results.original_cost_euros,
+            'optimized_cost_euros': results.optimized_cost_euros,
+            'savings_euros': results.savings_euros,
+            'savings_percent': results.savings_percent,
+            'calculated_at': results.calculated_at,
+        }

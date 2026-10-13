@@ -14,10 +14,17 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+from django.conf import settings
 from django.contrib import admin
+from django.contrib.auth.models import Group
 from django.urls import path, include
 
-admin.site.site_header = 'CONCAST Simulator'
+admin.site.site_header = 'SPARC · energy planning for CONCAST'
+admin.site.site_title = 'SPARC'
+admin.site.index_title = 'Data and calculations'
+admin.site.site_url = (settings.FRONTEND_URL or '') + '/'
+# Permissions are managed per user; groups are not needed for a single plant
+admin.site.unregister(Group)
 
 urlpatterns = [
     path('admin/', admin.site.urls),

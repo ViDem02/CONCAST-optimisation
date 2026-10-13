@@ -64,7 +64,10 @@ class Command(BaseCommand):
             self.stdout.write(f'  Total rows: {num_rows}')
             self.stdout.write(f'  Total electricity used: {results.total_electricity_used_kWh:.2f} kWh')
             self.stdout.write(f'  Grid purchases: {results.grid_electricity_purchased_kWh:.2f} kWh')
-            self.stdout.write(f'  Total cost: €{results.total_cost_euros:.2f}')
+            self.stdout.write(f'  Cost of the current plan: €{results.original_cost_euros:.2f}')
+            if results.optimized_cost_euros is not None:
+                self.stdout.write(f'  Cost of the plan to compare: €{results.optimized_cost_euros:.2f} '
+                                  f'(saving €{results.savings_euros:.2f})')
 
         except Simulation.DoesNotExist:
             raise CommandError(f'Simulation "{simulation_name}" does not exist')

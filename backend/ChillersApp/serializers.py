@@ -11,6 +11,7 @@ class ChillerSerializer(serializers.ModelSerializer):
         model = Chiller
         fields = [
             'id', 'name', 'insulation_u_value', 'surface_area',
+            'nominal_capacity_kW', 'nominal_cooling_rate', 'chiller_efficiency',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -60,8 +61,9 @@ class ChillerSimulationDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'chiller', 'chiller_name', 'chiller_details',
             'start_date', 'end_date',
             'min_temperature', 'max_temperature',
-            'initial_window_hours',
+            'target_temperature', 'initial_window_hours',
             'proportional_gain', 'derivative_gain',
+            'allow_grid_power', 'minimum_runtime_minutes',
             'production_plan_result', 'production_plan_name',
             'chiller_power_delivery', 'calculated_temperature',
             'created_at', 'updated_at'

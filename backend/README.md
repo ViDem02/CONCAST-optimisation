@@ -23,6 +23,8 @@ python manage.py makemigrations
 python manage.py migrate
 ```
 
+The settings use SQLite (`SQLITE_PATH`, default `backend/db.sqlite3`).
+
 4. Create a superuser (needed to use the API and the frontend):
 ```bash
 python manage.py createsuperuser
@@ -76,9 +78,9 @@ Each endpoint supports the standard REST operations:
 ## Data Models
 
 ### TemperatureDataset / PricesDataset / GenerationDataset
-Named hourly datasets (`name`, unique; `is_active`). Their records hold a `timestamp` and:
+Named hourly datasets (`name`, unique), uploaded as CSV files from their admin page (the file is checked for missing hours before anything is saved). Their records hold a `timestamp` and:
 - **TemperatureRecord**: `outside_temperature` (°C)
-- **PricesRecord**: `electricity_price` (€/kWh), `methane_price`
+- **PricesRecord**: `electricity_price` (€/kWh)
 - **GenerationRecord**: `ele_generated_by_solar_kWh`, `ele_generated_by_cogen_kWh`
 
 ### WeeklyProductionPlan
@@ -99,13 +101,13 @@ Shift schedule for a production process.
 - `start_day`, `end_day`: Integer (0-6, Monday-Sunday)
 - `start_hour`, `end_hour`: Integer (0-23)
 - `start_minutes`, `end_minutes`: Integer (0-55, multiple of 5)
-- `max_forward_minutes`, `max_backwards_minutes`: Integer (how far the shift may be moved; multiple of 5)
+- `max_forward_minutes`, `max_backwards_minutes`: Integer (how far the shift may be moved; multiple of 5). Each run takes the tolerance of the shift it comes from (the smaller one when two shifts touch)
 
 ### Simulation
 Evaluation of one or two plans over a period.
 - `name`: String (unique)
 - `notes`: Text
-- `reference_production_plan`, `original_production_plan`, `optimized_production_plan`: Foreign keys to WeeklyProductionPlan
+- `original_production_plan` ("current plan", required), `optimized_production_plan` ("plan to compare", optional): Foreign keys to WeeklyProductionPlan
 - `generation_dataset`, `prices_dataset`: Foreign keys to the datasets
 - `start_date`, `end_date`: Date
 
@@ -113,11 +115,11 @@ Evaluation of one or two plans over a period.
 Optimization configuration and results.
 - `name`: String (unique)
 - `notes`: Text
-- `optimizer`: Optimization algorithm to use (default: `milp`, an exact MILP solved by HiGHS through `scipy.optimize.milp`; `from-scratch`, LSQR + coordinate descent, is the first method we experimented with and is kept for comparison). Available optimizers are registered in `OptimizerApp/optimizers/__init__.py`
+- `optimizer`: Optimization algorithm to use, not shown in the admin (default: `milp`, an exact MILP solved by HiGHS through `scipy.optimize.milp`; `from-scratch`, LSQR + coordinate descent, is the first method we experimented with and is kept for comparison). Available optimizers are registered in `OptimizerApp/optimizers/__init__.py`
 - `reference_production_plan`: Foreign key to WeeklyProductionPlan
 - `optimized_production_plan`: Foreign key to WeeklyProductionPlan (set when the optimization runs)
 - `optimized_plan_name`: Name for the optimized plan (optional)
-- `reference_week_start`, `reference_week_end`: Date
+- `reference_week_start`, `reference_week_end`: Date (exactly one week; the end defaults to start + 6 days)
 - `generation_dataset`, `prices_dataset`: Foreign keys to the datasets
 - Results: `initial_cost_euros`, `optimized_cost_euros`, `cost_savings_euros`, `cost_savings_percent`, `optimization_data` (JSON diagnostics), `completed_at`
 
@@ -134,7 +136,7 @@ PD-controlled cold-room simulation.
 - `min_temperature`, `max_temperature`, `target_temperature` (°C)
 - `start_date`, `end_date`: Date
 - `initial_window_hours`, `proportional_gain`, `derivative_gain`, `allow_grid_power`, `minimum_runtime_minutes`
-- `production_plan_result`, `generation_dataset`, `prices_dataset`, `temperature_dataset`: inputs
+- `production_plan_result`, `generation_dataset`, `temperature_dataset`: inputs
 - `chiller_power_delivery`, `calculated_temperature`: JSON results
 
 See [ChillersApp/README.md](ChillersApp/README.md) for the control algorithm.
@@ -149,7 +151,8 @@ See [ChillersApp/README.md](ChillersApp/README.md) for the control algorithm.
 | `run_optimization [--optimizer <name>]` | Optimize a plan's shifts |
 | `run_chiller_simulation` | Run a chiller simulation |
 | `initadmin` | Create the first admin account from `DJANGO_SUPERUSER_PASSWORD` |
+| `setup_sparc` | First start (run by Docker): create the login from `SPARC_ADMIN_USER`/`SPARC_ADMIN_PASSWORD` and, on an empty database, load `SPARC_DEMO_DATA` and calculate the examples |
 
 ## Admin Interface
 
-Access the Django admin interface at `http://localhost:8000/admin/` to manage all entities through a user-friendly interface.
+The admin (`/admin/`) is the data-entry part of SPARC, ordered as the workflow (1 · Input data, 2 · Production plans and cost simulations, 3 · Shift optimisation, 4 · Cold rooms). Processes and shifts are edited from their production plan; simulation results are shown on their cost simulation. Calculable objects have a "Save and calculate" button (`simulator_project/admin_tools.RunButtonMixin`); changing a setting that affects the result removes the old result. Links to the charts use `FRONTEND_URL` (empty in Docker, where the website and the admin share the address).

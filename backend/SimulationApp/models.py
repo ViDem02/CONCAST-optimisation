@@ -18,7 +18,7 @@ class SimulationResults(models.Model):
         help_text="The simulation these results belong to"
     )
     
-    # Aggregated metrics
+    # Aggregated metrics (of the plan to compare when there is one, otherwise of the current plan)
     total_electricity_used_kWh = models.FloatField(
         help_text="Total electricity consumed during the simulation (kWh)"
     )
@@ -42,20 +42,14 @@ class SimulationResults(models.Model):
         help_text="Total generated electricity that was wasted (kWh)"
     )
     
-    # For dual-plan simulations store both costs explicitly
     original_cost_euros = models.FloatField(
         default=0,
-        help_text="Total cost (EUR) for the non-optimized plan"
+        help_text="Grid electricity cost (EUR) of the current plan"
     )
     optimized_cost_euros = models.FloatField(
-        default=0,
-        help_text="Total cost (EUR) for the optimized plan"
-    )
-    # Deprecated/legacy: may reflect a single-plan run; prefer the fields above
-    total_cost_euros = models.FloatField(
-        help_text="[Deprecated] Total cost for single-plan simulations (EUR)",
         null=True,
-        blank=True
+        blank=True,
+        help_text="Grid electricity cost (EUR) of the plan to compare (empty if there is none)"
     )
     
     total_co2_kg = models.FloatField(
@@ -92,6 +86,19 @@ class SimulationResults(models.Model):
     
     def __str__(self):
         return f"Results for {self.simulation.name}"
+
+    @property
+    def savings_euros(self):
+        """Cost reduction of the compared plan over the current plan (None without a compared plan)."""
+        if self.optimized_cost_euros is None:
+            return None
+        return self.original_cost_euros - self.optimized_cost_euros
+
+    @property
+    def savings_percent(self):
+        if self.savings_euros is None or not self.original_cost_euros:
+            return None
+        return self.savings_euros / self.original_cost_euros * 100
     
     def get_timestep_summary(self):
         """Return a summary of timestep data"""

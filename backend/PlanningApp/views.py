@@ -11,7 +11,7 @@ from .serializers import (
 
 class WeeklyProductionPlanViewSet(viewsets.ModelViewSet):
     """API endpoint for WeeklyProductionPlan."""
-    queryset = WeeklyProductionPlan.objects.all()
+    queryset = WeeklyProductionPlan.objects.prefetch_related('processes__shifts')
     serializer_class = WeeklyProductionPlanSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['is_optimized']
@@ -41,10 +41,11 @@ class ShiftViewSet(viewsets.ModelViewSet):
 
 class SimulationViewSet(viewsets.ModelViewSet):
     """API endpoint for Simulation."""
-    queryset = Simulation.objects.all()
+    queryset = Simulation.objects.select_related(
+        'original_production_plan', 'optimized_production_plan', 'generation_dataset', 'prices_dataset', 'results')
     serializer_class = SimulationSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['reference_production_plan']
+    filterset_fields = ['original_production_plan', 'optimized_production_plan']
     search_fields = ['name', 'notes']
     ordering_fields = ['name', 'start_date', 'created_at']
     

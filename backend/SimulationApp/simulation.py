@@ -8,9 +8,10 @@ This module implements the core simulation logic that:
 """
 
 from datetime import datetime, timedelta
+import numpy as np
 import pytz
 from django.conf import settings
-from PlanningApp.models import Simulation, Shift
+from PlanningApp.models import Simulation
 from DatasetApp.models import GenerationRecord, PricesRecord
 from .models import SimulationResults
 
@@ -61,39 +62,40 @@ def retime_hourly_to_5min(hourly_data, start_time, end_time, method='previous'):
     return timesteps, result
 
 
-def build_production_matrix(simulation, timesteps):
+def minutes_of_week(timesteps):
+    """Minute of the week (0 = Monday 00:00) of each timestep, as a numpy array."""
+    return np.array([ts.weekday() * 1440 + ts.hour * 60 + ts.minute for ts in timesteps])
+
+
+def shift_activity(week_minutes, shift):
     """
-    Build production matrix: N x M where N = timesteps, M = processes.
-    Each cell is 1 if the process is running, 0 otherwise.
-    
-    Args:
-        simulation: Simulation object
-        timesteps: List of datetime objects at 5-minute intervals
-    
+    Boolean array: True where the shift is running.
+
+    Vectorized equivalent of is_timestep_in_shift (same handling of
+    multi-day and week-wrapping shifts), with week_minutes from minutes_of_week.
+    """
+    start = shift.start_day * 1440 + shift.start_hour * 60 + shift.start_minutes
+    end = shift.end_day * 1440 + shift.end_hour * 60 + shift.end_minutes
+    if shift.start_day <= shift.end_day:
+        return (week_minutes >= start) & (week_minutes < end)
+    return (week_minutes >= start) | (week_minutes < end)  # Wraps around the end of the week
+
+
+def build_production_matrix(production_plan, timesteps):
+    """
+    Activity of every process of the plan.
+
     Returns:
-        dict: {process_name: [values for each timestep]}
+        dict: {process: boolean numpy array, True when the process runs at that timestep}
     """
-    production_plan = simulation.reference_production_plan
-    processes = production_plan.processes.all()
-    
-    production_matrix = {}
-    
-    for process in processes:
-        # Initialize all timesteps to 0
-        process_activity = [0] * len(timesteps)
-        
-        # Get all shifts for this process
-        shifts = process.shifts.all()
-        
-        for shift in shifts:
-            # For each timestep, check if it falls within this shift
-            for i, ts in enumerate(timesteps):
-                if is_timestep_in_shift(ts, shift):
-                    process_activity[i] = 1
-        
-        production_matrix[process.name] = process_activity
-    
-    return production_matrix
+    week_minutes = minutes_of_week(timesteps)
+    matrix = {}
+    for process in production_plan.processes.prefetch_related('shifts'):
+        active = np.zeros(len(timesteps), dtype=bool)
+        for shift in process.shifts.all():
+            active |= shift_activity(week_minutes, shift)
+        matrix[process] = active
+    return matrix
 
 
 def is_timestep_in_shift(timestamp, shift):
@@ -136,135 +138,73 @@ def is_timestep_in_shift(timestamp, shift):
     return False
 
 
-def calculate_electricity_demand(simulation, production_matrix, timesteps):
-    """
-    Calculate total electricity demand at each timestep.
-    
-    Args:
-        production_matrix: dict of {process_name: [activity values]}
-        timesteps: List of datetime objects
-    
-    Returns:
-        List of electricity demand in kWh per 5-minute step
-    """
-    from PlanningApp.models import Process, WeeklyProductionPlan
-
-    reference_plan:WeeklyProductionPlan = simulation.reference_production_plan 
-    
-    # Get electricity consumption for each process
-    process_consumption = {}
-    for process_name in production_matrix.keys():
-        try:
-            process = Process.objects.get(name=process_name, production_plan=reference_plan)
-            # Convert kWh (hourly) to kWh per 5-minute step
-            process_consumption[process_name] = process.electricity_consumption_kWh * (5 / 60)
-        except Process.DoesNotExist:
-            process_consumption[process_name] = 0
-    
-    # Calculate total demand at each timestep
-    total_demand = []
-    for i in range(len(timesteps)):
-        demand = 0
-        for process_name, activity in production_matrix.items():
-            if activity[i] == 1:
-                demand += process_consumption[process_name]
-        total_demand.append(demand)
-    
-    return total_demand
+def calculate_electricity_demand(production_matrix):
+    """Total electricity demand (kWh per 5-minute step) at each timestep."""
+    demand = 0
+    for process, active in production_matrix.items():
+        # Hourly consumption (kW) to kWh per 5-minute step
+        demand = demand + active * process.electricity_consumption_kWh * (5 / 60)
+    return np.asarray(demand, dtype=float)
 
 
-def run_simulation_for_plan(simulation, production_plan, timesteps, start_time, end_time):
-    """
-    Run simulation for a specific production plan.
-    
-    Args:
-        simulation: Simulation object
-        production_plan: WeeklyProductionPlan to simulate
-        timesteps: List of datetime objects at 5-minute intervals
-        start_time: Start datetime
-        end_time: End datetime
-    
-    Returns:
-        dict with simulation results including costs and timestep data
-    """
-    generation_dataset = simulation.generation_dataset
-    prices_dataset = simulation.prices_dataset
-    
-    # Temporarily set reference_production_plan for compatibility
-    original_ref = simulation.reference_production_plan
-    simulation.reference_production_plan = production_plan
-    
-    # 1. Build production matrix
-    production_matrix = build_production_matrix(simulation, timesteps)
-    
-    # 2. Calculate electricity demand
-    total_demand_kWh = calculate_electricity_demand(simulation, production_matrix, timesteps)
-    
-    # 3. Retime generation data to 5-minute intervals
+def load_generation_and_prices(simulation, start_time, end_time):
+    """Generation (kWh per step, solar and cogen) and price (EUR/kWh) on the 5-minute grid."""
     generation_records = GenerationRecord.objects.filter(
-        generation_dataset=generation_dataset,
+        generation_dataset=simulation.generation_dataset,
         timestamp__gte=start_time.replace(minute=0, second=0),
         timestamp__lte=end_time
     ).order_by('timestamp')
-    
+
     solar_hourly = [(r.timestamp, r.ele_generated_by_solar_kWh) for r in generation_records]
     cogen_hourly = [(r.timestamp, r.ele_generated_by_cogen_kWh) for r in generation_records]
-    
+
     _, solar_5min = retime_hourly_to_5min(solar_hourly, start_time, end_time, method='linear')
     _, cogen_5min = retime_hourly_to_5min(cogen_hourly, start_time, end_time, method='linear')
-    
-    # Convert hourly kWh to 5-minute kWh
-    solar_5min_kWh = [val * (5 / 60) for val in solar_5min]
-    cogen_5min_kWh = [val * (5 / 60) for val in cogen_5min]
-    
-    # 4. Retime prices data
+
     prices_records = PricesRecord.objects.filter(
-        prices_dataset=prices_dataset,
+        prices_dataset=simulation.prices_dataset,
         timestamp__gte=start_time.replace(minute=0, second=0),
         timestamp__lte=end_time
     ).order_by('timestamp')
-    
+
     electricity_price_hourly = [(r.timestamp, r.electricity_price) for r in prices_records]
     _, electricity_price_5min = retime_hourly_to_5min(
         electricity_price_hourly, start_time, end_time, method='previous'
     )
-    
-    # 5. Calculate grid electricity and costs
-    grid_electricity_kWh = []
-    total_generation_kWh = []
-    wasted_energy_kWh = []
-    grid_cost_euros = []
-    
-    for i in range(len(timesteps)):
-        gen_total = solar_5min_kWh[i] + cogen_5min_kWh[i]
-        demand = total_demand_kWh[i]
-        
-        total_generation_kWh.append(gen_total)
-        grid = max(0, demand - gen_total)
-        grid_electricity_kWh.append(grid)
-        waste = max(0, gen_total - demand)
-        wasted_energy_kWh.append(waste)
-        cost = grid * electricity_price_5min[i]
-        grid_cost_euros.append(cost)
-    
-    # Restore original reference
-    simulation.reference_production_plan = original_ref
-    
+
+    # Convert hourly kWh to 5-minute kWh
+    return (np.array(solar_5min) * (5 / 60), np.array(cogen_5min) * (5 / 60),
+            np.array(electricity_price_5min, dtype=float))
+
+
+def run_simulation_for_plan(production_plan, timesteps, solar_5min_kWh, cogen_5min_kWh, electricity_price_5min):
+    """
+    Run simulation for a specific production plan.
+
+    Returns:
+        dict with simulation results including costs and timestep data
+    """
+    total_demand_kWh = calculate_electricity_demand(build_production_matrix(production_plan, timesteps))
+    total_generation_kWh = solar_5min_kWh + cogen_5min_kWh
+    grid_electricity_kWh = np.maximum(0, total_demand_kWh - total_generation_kWh)
+    wasted_energy_kWh = np.maximum(0, total_generation_kWh - total_demand_kWh)
+    grid_cost_euros = grid_electricity_kWh * electricity_price_5min
+
     return {
-        'total_demand_kWh': total_demand_kWh,
-        'solar_generation_kWh': solar_5min_kWh,
-        'cogen_generation_kWh': cogen_5min_kWh,
-        'total_generation_kWh': total_generation_kWh,
-        'grid_electricity_kWh': grid_electricity_kWh,
-        'wasted_energy_kWh': wasted_energy_kWh,
-        'electricity_price': electricity_price_5min,
-        'grid_cost_euros': grid_cost_euros,
-        'total_electricity_used': sum(total_demand_kWh),
-        'total_grid_purchased': sum(grid_electricity_kWh),
-        'total_solar_generated': sum(solar_5min_kWh),
-        'total_cogen_generated': sum(cogen_5min_kWh),
-        'total_wasted': sum(wasted_energy_kWh),
-        'total_cost': sum(grid_cost_euros),
+        'total_demand_kWh': total_demand_kWh.tolist(),
+        'solar_generation_kWh': solar_5min_kWh.tolist(),
+        'cogen_generation_kWh': cogen_5min_kWh.tolist(),
+        'total_generation_kWh': total_generation_kWh.tolist(),
+        'grid_electricity_kWh': grid_electricity_kWh.tolist(),
+        'wasted_energy_kWh': wasted_energy_kWh.tolist(),
+        'electricity_price': electricity_price_5min.tolist(),
+        'grid_cost_euros': grid_cost_euros.tolist(),
+        'total_electricity_used': float(total_demand_kWh.sum()),
+        'total_grid_purchased': float(grid_electricity_kWh.sum()),
+        'total_solar_generated': float(solar_5min_kWh.sum()),
+        'total_cogen_generated': float(cogen_5min_kWh.sum()),
+        'total_wasted': float(wasted_energy_kWh.sum()),
+        'total_cost': float(grid_cost_euros.sum()),
     }
 
 
@@ -324,29 +264,14 @@ def run_simulation(simulation_id):
     required_start = start_time.replace(minute=0, second=0, microsecond=0)
     required_end = end_time.replace(minute=0, second=0, microsecond=0)
     
-    if gen_first > required_start:
-        raise ValueError(
-            f"Generation dataset starts at {gen_first}, but simulation requires data from {required_start}. "
-            f"Dataset is missing {(gen_first - required_start).total_seconds() / 3600:.1f} hours of data at the beginning."
-        )
-    
-    if gen_last < required_end:
-        raise ValueError(
-            f"Generation dataset ends at {gen_last}, but simulation requires data until {required_end}. "
-            f"Dataset is missing {(required_end - gen_last).total_seconds() / 3600:.1f} hours of data at the end."
-        )
-    
-    if prices_first > required_start:
-        raise ValueError(
-            f"Prices dataset starts at {prices_first}, but simulation requires data from {required_start}. "
-            f"Dataset is missing {(prices_first - required_start).total_seconds() / 3600:.1f} hours of data at the beginning."
-        )
-    
-    if prices_last < required_end:
-        raise ValueError(
-            f"Prices dataset ends at {prices_last}, but simulation requires data until {required_end}. "
-            f"Dataset is missing {(required_end - prices_last).total_seconds() / 3600:.1f} hours of data at the end."
-        )
+    for label, dataset, first, last in [('generation', generation_dataset, gen_first, gen_last),
+                                        ('prices', prices_dataset, prices_first, prices_last)]:
+        if first > required_start or last < required_end:
+            raise ValueError(
+                f"The {label} data \"{dataset.name}\" covers {first:%d %b %Y} to {last:%d %b %Y}, "
+                f"but the simulation needs {required_start:%d %b %Y} to {required_end:%d %b %Y}. "
+                f"Choose dates inside the data or upload more data."
+            )
     
     # Build 5-minute timestep vector
     timesteps = []
@@ -358,18 +283,20 @@ def run_simulation(simulation_id):
     num_timesteps = len(timesteps)
     
     # Determine which plans to run
-    original_plan = simulation.original_production_plan or simulation.reference_production_plan
+    original_plan = simulation.original_production_plan
     optimized_plan = simulation.optimized_production_plan
     
     if not original_plan:
-        raise ValueError("Simulation must have an original_production_plan or reference_production_plan")
+        raise ValueError("Simulation must have a current production plan")
+    
+    datasets = load_generation_and_prices(simulation, start_time, end_time)
     
     # Run simulation for original plan
-    original_results = run_simulation_for_plan(simulation, original_plan, timesteps, start_time, end_time)
+    original_results = run_simulation_for_plan(original_plan, timesteps, *datasets)
     
-    # Run simulation for optimized plan (if available)
+    # Run simulation for the plan to compare (if available)
     if optimized_plan:
-        optimized_results = run_simulation_for_plan(simulation, optimized_plan, timesteps, start_time, end_time)
+        optimized_results = run_simulation_for_plan(optimized_plan, timesteps, *datasets)
         optimized_cost = optimized_results['total_cost']
         
         # Use optimized plan's data for aggregated metrics
@@ -392,10 +319,12 @@ def run_simulation(simulation_id):
             'grid_cost_euros': optimized_results['grid_cost_euros'],
             'original_cost_euros': original_results['grid_cost_euros'],  # Original cost timeseries
             'optimized_cost_euros': optimized_results['grid_cost_euros'],  # Optimized cost timeseries
+            'original_demand_kWh': original_results['total_demand_kWh'],
+            'original_grid_electricity_kWh': original_results['grid_electricity_kWh'],
         }
     else:
-        # Single plan simulation (backward compatibility)
-        optimized_cost = 0
+        # Single plan simulation
+        optimized_cost = None
         total_electricity_used = original_results['total_electricity_used']
         total_grid_purchased = original_results['total_grid_purchased']
         total_solar_generated = original_results['total_solar_generated']
@@ -431,7 +360,6 @@ def run_simulation(simulation_id):
             'wasted_energy_kWh': total_wasted,
             'original_cost_euros': original_cost,
             'optimized_cost_euros': optimized_cost,
-            'total_cost_euros': optimized_cost if optimized_plan else original_cost,
             'total_co2_kg': total_co2,
             'timestep_minutes': 5,
             'num_timesteps': num_timesteps,

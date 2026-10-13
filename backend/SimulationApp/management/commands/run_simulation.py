@@ -55,7 +55,10 @@ class Command(BaseCommand):
             self.stdout.write(f'Solar Generated: {results.solar_generated_kWh:.2f} kWh')
             self.stdout.write(f'Cogen Generated: {results.cogen_generated_kWh:.2f} kWh')
             self.stdout.write(f'Wasted Energy: {results.wasted_energy_kWh:.2f} kWh')
-            self.stdout.write(f'Total Cost: €{results.total_cost_euros:.2f}')
+            self.stdout.write(f'Cost of the current plan: €{results.original_cost_euros:.2f}')
+            if results.optimized_cost_euros is not None:
+                self.stdout.write(f'Cost of the plan to compare: €{results.optimized_cost_euros:.2f} '
+                                  f'(saving €{results.savings_euros:.2f})')
             self.stdout.write(f'Total CO2: {results.total_co2_kg:.2f} kg')
             self.stdout.write(f'Number of Timesteps: {results.num_timesteps}')
 

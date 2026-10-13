@@ -1,0 +1,807 @@
+  % ======================================================================
+  %  SPARC - Industrial report for CONCAST
+  %  Built on the personal LaTeX template (template/doc.tex).
+  %  Compile: latexmk -pdf sparc_industrial_report.tex
+  % ======================================================================
+
+  \documentclass[10pt,a4paper]{scrartcl}
+
+  % --------------------------------------------------
+  % Encoding and language
+  % --------------------------------------------------
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage[english]{babel}
+
+  % --------------------------------------------------
+  % Page layout
+  % --------------------------------------------------
+  \usepackage[
+    top=18mm,
+    bottom=18mm,
+    left=20mm,
+    right=20mm,
+    includefoot
+  ]{geometry}
+
+  % --------------------------------------------------
+  % Mathematics and graphics
+  % --------------------------------------------------
+  \usepackage{graphicx}
+  \usepackage{amsmath,amssymb}
+  \usepackage{bm}
+  \setlength{\jot}{0.25cm}
+
+  \usepackage{tikz}
+  \usetikzlibrary{positioning,arrows.meta,shapes.geometric,patterns,calc}
+  \usepackage{pgfplots}
+  \pgfplotsset{compat=1.18}
+
+  % --------------------------------------------------
+  % Tables
+  % --------------------------------------------------
+  \usepackage{booktabs}
+  \usepackage{float}
+  \usepackage[font=small,labelfont=bf,justification=raggedright,singlelinecheck=true]{caption}
+  \usepackage{tabularx}
+  \usepackage{array}
+  \usepackage{ragged2e}
+
+  % A ragged-right fixed-width column for use in tabularx:
+  %   \begin{tabularx}{\textwidth}{@{}L{3cm} X@{}}
+  \newcolumntype{L}[1]{>{\RaggedRight\arraybackslash}p{#1}}
+  \newcolumntype{Y}{>{\RaggedRight\arraybackslash}X}
+  \newcolumntype{R}{>{\raggedleft\arraybackslash}X}
+
+  % --------------------------------------------------
+  % Typography
+  % --------------------------------------------------
+  \usepackage[scaled=0.95]{helvet}
+  \usepackage[expansion=false]{microtype}   % expansion=false avoids font errors
+  \renewcommand{\familydefault}{\sfdefault} % sans-serif throughout
+  \usepackage[gen]{eurosym}
+  \newcommand{\Eur}[1]{\euro\,#1}
+
+  % --------------------------------------------------
+  % Lists
+  % --------------------------------------------------
+  \usepackage{enumitem}
+  \setlist[itemize]{
+    leftmargin=*,
+    topsep=2pt,
+    parsep=0pt,
+    partopsep=0pt,
+    itemsep=3pt
+  }
+  \setlist[enumerate]{
+    leftmargin=*,
+    topsep=2pt,
+    parsep=0pt,
+    partopsep=0pt,
+    itemsep=3pt
+  }
+  \setlist[description]{
+    leftmargin=0pt,
+    topsep=2pt,
+    parsep=0pt,
+    itemsep=3pt
+  }
+
+  % --------------------------------------------------
+  % Colour and hyperlinks
+  % --------------------------------------------------
+  \usepackage[dvipsnames]{xcolor}
+  \usepackage[hidelinks]{hyperref}
+
+  \definecolor{accent}{RGB}{0,129,88}   % change this to restyle everything
+  \definecolor{accentB}{RGB}{37,99,235}
+  \definecolor{warn}{RGB}{178,107,0}
+
+  % \emph produces upright accent-coloured text instead of italic.
+  % Use \textit{} when you genuinely want italics.
+  \renewcommand{\emph}[1]{\textcolor{accent}{#1}}
+
+  % Boxes for key figures and practical notes
+  \usepackage[most]{tcolorbox}
+  \newtcolorbox{keybox}[1]{colback=accent!6,colframe=accent!70,boxrule=0.6pt,arc=2pt,
+    left=6pt,right=6pt,top=4pt,bottom=4pt,fonttitle=\bfseries\small,title={#1}}
+  \newtcolorbox{notebox}[1]{colback=warn!6,colframe=warn!70,boxrule=0.6pt,arc=2pt,
+    left=6pt,right=6pt,top=4pt,bottom=4pt,fonttitle=\bfseries\small,title={#1}}
+
+  % --------------------------------------------------
+  % Header and footer
+  % --------------------------------------------------
+  \usepackage[automark,headsepline=false,footsepline=false]{scrlayer-scrpage}
+  \clearpairofpagestyles
+
+  \ifoot{V.\,G. De Matteis}
+  \cfoot{\pagemark}
+  \ofoot{SPARC --- Industrial report for CONCAST}
+
+  \setlength{\footskip}{20mm}  % pushes footer toward the page edge
+  \pagestyle{scrheadings}
+
+  % --------------------------------------------------
+  % Spacing
+  % --------------------------------------------------
+  \setlength{\parindent}{0pt}
+  \setlength{\parskip}{0.45em}
+
+  % --------------------------------------------------
+  % Section formatting
+  % --------------------------------------------------
+  \RedeclareSectionCommand[
+    beforeskip=1.4ex plus 0.2ex minus 0.1ex,
+    afterskip=0.6ex
+  ]{section}
+  \RedeclareSectionCommand[
+    beforeskip=1.0ex plus 0.2ex minus 0.1ex,
+    afterskip=0.4ex
+  ]{subsection}
+  \RedeclareSectionCommand[
+    beforeskip=0.7ex plus 0.2ex minus 0.1ex,
+    afterskip=0.3ex
+  ]{subsubsection}
+
+  \setkomafont{section}{\large\bfseries\color{accent}}
+  \setkomafont{subsection}{\normalsize\bfseries\color{accent}}
+  \setkomafont{subsubsection}{\normalsize\bfseries}
+
+  % A section command that adds a faint rule beneath the title.
+  % Start a new page if less than #1 is left (keeps headings with their text)
+  \makeatletter
+  \newcommand{\NeedSpace}[1]{\par\begingroup\dimen@=\pagegoal\advance\dimen@-\pagetotal
+    \ifdim\dimen@<#1\relax\newpage\fi\endgroup}
+  \makeatother
+  \newcommand{\RuleSection}[1]{%
+    \NeedSpace{10\baselineskip}%
+    \section{#1}%
+    \vspace{0.2em}{\color{accent!35}\hrule height 0.4pt}\vspace{0.3em}%
+  }
+
+  % Shared style of the charts
+  \pgfplotsset{sparc/.style={
+    width=\textwidth, height=5.2cm, grid=major, grid style={gray!20},
+    tick label style={font=\scriptsize}, label style={font=\footnotesize},
+    legend style={font=\scriptsize, draw=none, fill=none}, axis lines*=left}}
+
+  % ======================================================================
+  \begin{document}
+  % ======================================================================
+
+  % --------------------------------------------------
+  % Title block
+  % --------------------------------------------------
+  \begin{center}
+    {\Huge\bfseries\color{accent} SPARC: energy-aware production scheduling}\\[0.25cm]
+    {\large Industrial report --- shift optimisation, cost simulation and cold-room control at CONCAST}\\[0.2cm]
+    {\small Prepared for: CONCAST plant and energy management \quad\textbullet\quad Version 1.0 \quad\textbullet\quad October 2026}\\[0.1cm]
+    {\small Victor Gabriele De Matteis}\\[0.2cm]
+    {\color{accent!35}\hrule height 0.5pt}
+  \end{center}
+
+  \vspace{0.3em}
+
+  % ======================================================================
+  \RuleSection{Executive summary}
+  \label{sec:summary}
+
+  SPARC is a software tool, installed on a plant computer, that \emph{moves the flexible
+  production batches} within the time window each batch is allowed to move, so that more of their
+  electricity comes from the plant's own cogenerator and solar panels, or is bought when the grid
+  price is lower. It then checks the effect on the electricity bill over any period, and it can
+  simulate a cold room cooled with surplus on-site production.
+
+  We tested SPARC on the real CONCAST data: the reference production week, hourly on-site
+  generation from January 2024 to October 2025 and hourly grid prices. Each of the
+  \textbf{92 weeks} was optimised with the generation and prices of that week.
+
+  \begin{keybox}{Key figures}
+    \begin{tabularx}{\linewidth}{@{}L{0.46\linewidth} R R@{}}
+      & \textbf{Current plants} & \textbf{With FV3 solar plant} \\
+      \midrule
+      Grid electricity cost today (average per year)            & \Eur{221\,100} & \Eur{188\,500} \\
+      Saving if every week is optimised with its own data         & \textbf{\Eur{4\,600}/year (2.1\%)} & \textbf{\Eur{5\,100}/year (2.7\%)} \\
+      Saving if last week's optimised plan is reused             & \Eur{1\,600}/year & \Eur{2\,000}/year \\
+      Grid electricity avoided (weekly optimisation)              & 18\,MWh/year & 21\,MWh/year \\
+      Time to optimise one week                                    & about 2\,s & about 1\,s \\
+    \end{tabularx}
+  \end{keybox}
+
+  \textbf{What this means.}
+  \begin{itemize}
+    \item The savings are \emph{real but modest}: only three of the six processes may move
+      (\texttt{b\_past}, \texttt{b\_burr} and \texttt{b\_conf}), they use 16\% of
+      the weekly electricity, and they may move by at most two hours.
+    \item The optimisation is \emph{exact}: for the data it is given, SPARC finds the cheapest
+      possible timetable and proves it (183 of the 184 weekly runs; the last one is within 1.5\% of
+      the best).
+    \item \emph{How SPARC is used matters more than the algorithm.} Reusing one optimised week on
+      the following weeks keeps only a third of the saving, and in about one week out of four it
+      costs more than the original plan. The saving is captured only by re-optimising every week
+      with the expected generation and prices of the coming week.
+    \item The new FV3 solar plant on its own lowers the grid bill by about \Eur{32\,600} per year
+      with today's timetable; SPARC adds about \Eur{5\,100} on top and makes better use of the extra
+      midday production.
+  \end{itemize}
+
+  \textbf{Recommendations} (details in Section~\ref{sec:next}).
+  \begin{enumerate}
+    \item Run a \textbf{weekly planning routine}: every week, optimise the coming week with the
+      day-ahead prices and a solar/cogeneration forecast, then hand the plan to production.
+    \item With production, \textbf{confirm the rules} the tool does not yet know: order between
+      processes, cleaning time between batches, staff availability. Add them before going live.
+    \item \textbf{Review the flexibility windows}: each extra hour of allowed movement is worth
+      money (Section~\ref{sec:sensitivity}).
+    \item Treat the cold-room module as a \textbf{pilot} until its room model is calibrated on
+      measured temperatures.
+  \end{enumerate}
+
+  % ======================================================================
+  \RuleSection{The opportunity}
+  \label{sec:opportunity}
+
+  \subsection{The plant's electricity today}
+
+  Table~\ref{tab:balance} summarises an average week with the reference production timetable.
+  Production needs about 44.5\,MWh per week. The cogenerator and the solar panels produce
+  31.9\,MWh, but only 22.8\,MWh of it is used by production: the rest (9.1\,MWh) is produced when
+  production does not need it, typically at night and at weekends. About half of the electricity is
+  therefore bought from the grid while, at other times, on-site production goes unused.
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}Y R R@{}}
+  \toprule
+  \textbf{Average week (Jan 2024 -- Oct 2025)} & \textbf{Current plants} & \textbf{With FV3} \\
+  \midrule
+  Electricity used by production            & 44.5\,MWh & 44.5\,MWh \\
+  Produced by the cogenerator               & 28.5\,MWh & 28.5\,MWh \\
+  Produced by the solar panels              & 3.4\,MWh  & 10.9\,MWh \\
+  Bought from the grid                      & 21.7\,MWh (49\%) & 18.2\,MWh (41\%) \\
+  On-site production left unused            & 9.1\,MWh  & 13.1\,MWh \\
+  Cost of the electricity bought            & \Eur{4\,250} & \Eur{3\,630} \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Weekly electricity balance with the current production timetable. Unused production is
+  not credited (no sale to the grid is assumed).}
+  \label{tab:balance}
+  \end{table}
+
+  \subsection{What can move}
+
+  The production plan is a typical week. Each process has a constant power while it runs and a
+  number of \emph{runs} (continuous blocks of activity) in the week. Three processes are fixed; the
+  other three may start up to two hours earlier or later (Table~\ref{tab:processes}). \texttt{b\_past} alone
+  carries 92\% of the flexible energy: it is the process that matters.
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}L{2.2cm} R R R R L{4.2cm}@{}}
+  \toprule
+  \textbf{Process} & \textbf{Power} & \textbf{Hours/week} & \textbf{Runs/week} & \textbf{Energy/week} & \textbf{Allowed movement} \\
+  \midrule
+  \texttt{s\_finit} & 100\,kW & 119.0 & 4 & 11.9\,MWh & fixed \\
+  \texttt{s\_torre} & 130\,kW & 129.5 & 2 & 16.8\,MWh & fixed \\
+  \texttt{s\_hiro}  & 134\,kW & 65.3  & 3 & 8.7\,MWh  & fixed \\
+  \texttt{b\_past}  & 278\,kW & 23.3  & 5 & 6.5\,MWh  & up to 2\,h earlier or later \\
+  \texttt{b\_burr}  & 5\,kW   & 25.0  & 9 & 0.1\,MWh  & up to 2\,h earlier or later \\
+  \texttt{b\_conf}  & 19\,kW  & 24.8  & 8 & 0.5\,MWh  & up to 2\,h earlier or later \\
+  \midrule
+  \textbf{Total} & & & 31 & 44.5\,MWh & 7.1\,MWh flexible (16\%) \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Processes of the reference week (timetable of 22--28 September 2025, file
+  \texttt{data/production\_timetable.csv}; powers and movement from \texttt{data/production.yaml}).}
+  \label{tab:processes}
+  \end{table}
+
+  Figure~\ref{fig:idea} shows the principle on one batch: moving it two hours later puts most of
+  it under the midday solar production, so less electricity is bought.
+
+  \begin{figure}[H]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[sparc, height=4.4cm, width=0.82\textwidth, xmin=0, xmax=24, ymin=0, ymax=430,
+        xlabel={Hour of the day}, ylabel={kW}, xtick={0,4,...,24},
+        legend pos=north west, legend columns=3]
+      \addplot[fill=yellow!35, draw=orange!70!black, smooth] coordinates
+        {(6,0) (8,40) (10,180) (12,300) (13,310) (14,280) (16,150) (18,30) (19,0)};
+      \addlegendentry{Solar production}
+      \addplot[fill=gray!40, fill opacity=0.6, draw=gray, const plot] coordinates {(7.5,0) (7.5,278) (12,278) (12,0)};
+      \addlegendentry{Batch, original time}
+      \addplot[pattern=north east lines, pattern color=accentB, draw=accentB, thick, const plot]
+        coordinates {(9.5,0) (9.5,278) (14,278) (14,0)};
+      \addlegendentry{Batch, 2\,h later}
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Illustration (not real data): a 278\,kW \texttt{b\_past} batch moved two hours later
+  overlaps much more with solar production.}
+  \label{fig:idea}
+  \end{figure}
+
+  % ======================================================================
+  \RuleSection{What SPARC does}
+  \label{sec:tool}
+
+  SPARC has three functions, used through a web browser:
+
+  \begin{description}
+    \item[] \textbf{Shift optimisation} --- for a production plan and a \emph{reference week}, it
+      chooses the start time of every flexible run so that the electricity bought from the grid in
+      that week costs as little as possible. The result is saved as a new production plan.
+    \item[] \textbf{Cost simulation} --- for any period (a week, a month, a season), it calculates
+      the electricity bought and its cost for one plan, or for two plans side by side. This is how
+      an optimised plan is checked before it is adopted.
+    \item[] \textbf{Cold-room simulation} (pilot) --- it simulates a cold room kept within its
+      temperature range, cooling first with on-site production and pre-cooling when there is
+      surplus (Section~\ref{sec:coldroom}).
+  \end{description}
+
+  \begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[
+      node distance=5mm and 5.5mm,
+      box/.style={draw=accent!70, fill=accent!6, rounded corners=2pt, align=center,
+                  font=\footnotesize, minimum height=11mm, text width=27mm},
+      outbox/.style={box, draw=accentB!70, fill=accentB!6},
+      arr/.style={-{Stealth[length=2mm]}, thick, gray!70!black}]
+    \node[box] (data) {Hourly data\\generation, prices,\\temperature};
+    \node[box, below=of data] (plan) {Production plan\\timetable +\\allowed movement};
+    \node[box, right=12mm of $(data.east)!0.5!(plan.east)$, anchor=west] (opt) {Shift optimisation\\on a reference\\week};
+    \node[outbox, right=of opt] (new) {Optimised\\production plan};
+    \node[box, right=of new] (sim) {Cost simulation\\over a month\\or a season};
+    \node[outbox, right=of sim, text width=20mm] (dec) {Decision:\\adopt the plan};
+    \node[box, below=9mm of sim, draw=gray, fill=gray!8] (cold) {Cold-room\\simulation (pilot)};
+    \draw[arr] (data.east) -- (opt.west);
+    \draw[arr] (plan.east) -- (opt.west);
+    \draw[arr] (opt) -- (new);
+    \draw[arr] (new) -- (sim);
+    \draw[arr] (sim) -- (dec);
+    \draw[arr, dashed] (sim) -- node[right=1mm, font=\scriptsize, align=left] {unused\\production} (cold);
+  \end{tikzpicture}
+  \caption{How SPARC is used. Data are entered once; optimisation and checks take seconds.}
+  \label{fig:workflow}
+  \end{figure}
+
+  \subsection{How the optimisation decides}
+
+  The week is divided into 5-minute steps (2\,016 per week). For every flexible run SPARC
+  considers every allowed start time --- for a run that may move two hours either way, 49
+  possibilities --- and picks one per run so that the \emph{cost of the electricity bought from the
+  grid in the week} is the lowest. At each 5-minute step, production first uses the on-site
+  generation; only what is missing is bought, at that hour's price.
+
+  The schedule always respects these rules:
+  \begin{itemize}
+    \item a run moves only within its allowed window (fixed runs never move);
+    \item a run keeps its length and power;
+    \item two runs of the same process never overlap (one machine cannot do two batches at once).
+  \end{itemize}
+
+  Technically this is a \emph{mixed-integer linear programme} (Appendix~\ref{app:model}) solved
+  with the open-source solver HiGHS. For one week it has about 1\,100 yes/no decisions and is solved
+  to proven optimality in 1--2 seconds; a 20-second limit protects the web page in rare hard cases.
+
+  \begin{notebox}{What the optimisation does not know (yet)}
+    \begin{itemize}
+      \item Order between processes: if one batch must finish before another can start, this is not
+        enforced. Each process is moved on its own.
+      \item Cleaning or changeover time between two runs of the same process: runs may end up back
+        to back.
+      \item Staff, shifts of people, deliveries and storage limits.
+      \item Value of unused production (sale to the grid), power peaks and capacity charges, fuel
+        cost of the cogenerator: only the energy bought from the grid is counted.
+    \end{itemize}
+    A proposed plan must therefore be reviewed by production planning before it is used.
+  \end{notebox}
+
+  % ======================================================================
+  \RuleSection{Results on CONCAST data}
+  \label{sec:results}
+
+  \subsection{How the results were obtained}
+
+  Every full week from Monday 1 January 2024 to Sunday 5 October 2025 (92 weeks) was optimised
+  with the generation and prices of that week, and compared with the original timetable. This was
+  done twice: with the current plants (\texttt{generation.csv}) and with the additional FV3 solar
+  plant (\texttt{generation\_fv3.csv}). The same reference timetable was used for every week. The
+  calculation uses exactly the code of the tool (Appendix~\ref{app:method}).
+
+  \subsection{Savings}
+  \label{sec:savings}
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}L{0.5\textwidth} R R@{}}
+  \toprule
+  \textbf{92 weeks, every week optimised with its own data} & \textbf{Current plants} & \textbf{With FV3} \\
+  \midrule
+  Grid cost, original timetable          & \Eur{391\,207} & \Eur{333\,499} \\
+  Grid cost, optimised timetables        & \Eur{383\,014} & \Eur{324\,449} \\
+  \textbf{Saving}                         & \textbf{\Eur{8\,193} (2.1\%)} & \textbf{\Eur{9\,050} (2.7\%)} \\
+  Saving per week: lowest / typical / highest & \Eur{28} / \Eur{80} / \Eur{215} & \Eur{33} / \Eur{92} / \Eur{251} \\
+  Saving per year (52 weeks)              & \Eur{4\,630} & \Eur{5\,120} \\
+  Grid electricity avoided per year       & 18.4\,MWh & 21.4\,MWh \\
+  CO$_2$ avoided per year (0.5\,kg/kWh)   & 9\,t & 11\,t \\
+  Flexible runs moved (typical week)     & 21 of 22 & 21 of 22 \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Savings when each week is optimised knowing that week's generation and prices. This is
+  the most that can be obtained with the current flexibility windows.}
+  \label{tab:savings}
+  \end{table}
+
+  The saving is positive every week, but it varies (Figure~\ref{fig:weekly}): it depends on how
+  much on-site production and how much price difference fall within two hours of the flexible
+  runs. In percentage terms it is highest in spring and summer, when solar production is large
+  (Table~\ref{tab:seasons}); in winter the bill is high but the flexible runs have little
+  solar production to move into. The grid electricity avoided is exactly on-site production that
+  was previously unused: SPARC does not reduce consumption, it uses the plant's own production
+  better.
+
+  \begin{figure}[H]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[sparc, ymin=0, xmin=-1, xmax=92, ylabel={Saving per week (\euro)},
+        xtick={0,13,26,39,52,65,78,91},
+        xticklabels={Jan 24,Apr 24,Jul 24,Oct 24,Jan 25,Apr 25,Jul 25,Oct 25},
+        legend pos=north west, legend columns=2]
+      \addplot[accent, thick, mark=none] coordinates {(0,51) (1,53) (2,70) (3,61) (4,150) (5,141) (6,83) (7,78) (8,109) (9,140) (10,38) (11,39) (12,38) (13,67) (14,166) (15,63) (16,93) (17,33) (18,73) (19,123) (20,51) (21,72) (22,80) (23,134) (24,53) (25,45) (26,148) (27,67) (28,126) (29,88) (30,81) (31,150) (32,43) (33,88) (34,66) (35,102) (36,107) (37,57) (38,89) (39,73) (40,116) (41,106) (42,93) (43,162) (44,127) (45,183) (46,35) (47,37) (48,42) (49,66) (50,53) (51,61) (52,40) (53,46) (54,79) (55,95) (56,58) (57,83) (58,40) (59,74) (60,50) (61,150) (62,114) (63,168) (64,91) (65,97) (66,158) (67,87) (68,119) (69,66) (70,137) (71,79) (72,148) (73,215) (74,114) (75,149) (76,88) (77,157) (78,65) (79,115) (80,44) (81,28) (82,95) (83,59) (84,35) (85,68) (86,100) (87,74) (88,107) (89,68) (90,97) (91,69)};
+      \addlegendentry{Current plants}
+      \addplot[accentB, thick, dashed, mark=none] coordinates {(0,53) (1,89) (2,70) (3,49) (4,143) (5,128) (6,115) (7,40) (8,91) (9,69) (10,71) (11,45) (12,38) (13,64) (14,158) (15,135) (16,85) (17,44) (18,61) (19,139) (20,54) (21,79) (22,99) (23,97) (24,93) (25,74) (26,180) (27,86) (28,127) (29,71) (30,57) (31,251) (32,77) (33,100) (34,116) (35,130) (36,80) (37,33) (38,145) (39,62) (40,151) (41,102) (42,114) (43,169) (44,149) (45,195) (46,35) (47,37) (48,42) (49,66) (50,53) (51,61) (52,40) (53,46) (54,79) (55,95) (56,58) (57,84) (58,40) (59,76) (60,52) (61,185) (62,117) (63,107) (64,124) (65,92) (66,94) (67,161) (68,155) (69,53) (70,203) (71,84) (72,155) (73,223) (74,124) (75,81) (76,149) (77,154) (78,121) (79,112) (80,49) (81,35) (82,100) (83,36) (84,45) (85,75) (86,111) (87,135) (88,158) (89,135) (90,111) (91,125)};
+      \addlegendentry{With FV3}
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Saving of each week when it is optimised with its own generation and prices.}
+  \label{fig:weekly}
+  \end{figure}
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}L{3.3cm} R R R R R@{}}
+  \toprule
+  & & \multicolumn{2}{c}{\textbf{Current plants}} & \multicolumn{2}{c}{\textbf{With FV3}} \\
+  \cmidrule(lr){3-4}\cmidrule(l){5-6}
+  \textbf{Season} & \textbf{Weeks} & \textbf{Grid cost/week} & \textbf{Saving/week} & \textbf{Grid cost/week} & \textbf{Saving/week} \\
+  \midrule
+  Winter (Dec--Feb) & 22 & \Eur{7\,059} & \Eur{72} (1.0\%)  & \Eur{6\,525} & \Eur{71} (1.1\%) \\
+  Spring (Mar--May) & 26 & \Eur{2\,731} & \Eur{101} (3.7\%) & \Eur{2\,184} & \Eur{107} (4.9\%) \\
+  Summer (Jun--Aug) & 26 & \Eur{3\,412} & \Eur{88} (2.6\%)  & \Eur{2\,564} & \Eur{101} (3.9\%) \\
+  Autumn (Sep--Nov) & 18 & \Eur{4\,233} & \Eur{95} (2.2\%)  & \Eur{3\,696} & \Eur{115} (3.1\%) \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Savings by season (weeks grouped by the month in which they start).}
+  \label{tab:seasons}
+  \end{table}
+
+  \subsection{The way SPARC is used decides the saving}
+  \label{sec:operation}
+
+  The figures above assume that each week is optimised knowing its own generation and prices. In
+  practice the plan is prepared before the week starts. We therefore tested two simple ways of
+  working that need no forecast (Table~\ref{tab:strategies}).
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}L{0.42\textwidth} R R R@{}}
+  \toprule
+  \textbf{Way of working (current plants)} & \textbf{Saving per year} & \textbf{Share of the potential} & \textbf{Weeks costing more than today} \\
+  \midrule
+  Optimise each week with its own data (upper bound)       & \Eur{4\,630} & 100\% & none \\
+  Reuse last week's optimised plan                          & \Eur{1\,600} & 34\%  & 22 of 91 \\
+  One optimised plan per season, reused all season          & \Eur{1\,070} & 23\%  & 27 of 92 \\
+  \midrule
+  \textit{With FV3:} optimise each week / reuse last week's plan & \Eur{5\,120} / \Eur{2\,000} & 100\% / 38\% & none / 17 of 91 \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Saving actually obtained depending on how the optimised plan is prepared. The seasonal
+  plans were optimised on a typical 2024 week of each season.}
+  \label{tab:strategies}
+  \end{table}
+
+  The reason is simple: the shifts move by at most two hours, so the best position depends on the
+  hour-by-hour pattern of the specific week --- whether the cogenerator runs, whether the morning is
+  sunny, when prices peak. A plan tuned on another week moves batches into hours that may be worse
+  in the week where it is applied. The example in the tool shows the same effect: the plan
+  optimised on the week of 15~July~2024 saves 5.2\% on that week but only 0.9\% over the whole of
+  July.
+
+  \begin{keybox}{Practical consequence}
+    To capture the saving, SPARC should be run \textbf{every week, for the coming week}, with the
+    best available expectation of that week: day-ahead electricity prices (known the day before),
+    a solar production forecast and the planned cogenerator operation. With perfect information the
+    potential is \Eur{4\,600}--\Eur{5\,100} per year; a good forecast should recover most of it,
+    which is to be verified in the pilot (Section~\ref{sec:next}).
+  \end{keybox}
+
+  \subsection{The value of more flexibility}
+  \label{sec:sensitivity}
+
+  The two-hour window is the main limit. We repeated the optimisation on one week in four (23
+  weeks, current plants), giving the three flexible processes a window of one to four hours each
+  way (Table~\ref{tab:window}).
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}Y R R R@{}}
+  \toprule
+  \textbf{Allowed movement of \texttt{b\_past}, \texttt{b\_burr}, \texttt{b\_conf}} & \textbf{Saving} & \textbf{Saving per year} & \textbf{Longest solve} \\
+  \midrule
+  Up to 1 hour earlier or later      & \Eur{1\,133} (1.1\%) & \Eur{2\,560} & 1.5\,s \\
+  Up to 2 hours (today's setting)   & \Eur{1\,884} (1.8\%) & \Eur{4\,260} & 7\,s \\
+  Up to 3 hours                      & \Eur{2\,552} (2.5\%) & \Eur{5\,770} & 18\,s \\
+  Up to 4 hours                      & \Eur{3\,108} (3.0\%)$^{*}$ & \Eur{7\,030}$^{*}$ & 20\,s (limit) \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Saving (each week optimised with its own data) against the width of the window, on 23
+  weeks spread over the 92. $^{*}$Some weeks reached the 20-second limit: the true saving is
+  slightly higher.}
+  \label{tab:window}
+  \end{table}
+
+  Each extra hour of allowed movement adds roughly \Eur{1\,300}--\Eur{1\,700} per year: three hours
+  each way would give about 35\% more saving than today, four hours about 65\% more. (On this
+  sample of weeks, today's setting gives \Eur{4\,260} per year instead of the \Eur{4\,630} of the
+  full 92 weeks; the comparison between rows is what matters.) Wider windows make the calculation
+  longer: with four hours some weeks reach the 20-second limit of the web page, which should then be
+  raised.
+
+  \subsection{Comparison with the earlier method}
+
+  SPARC also contains the first method developed in the project (a least-squares fit followed by a
+  local search). On the CONCAST data it produced, \emph{in every one of the 92 weeks}, plans in
+  which two batches of the same process overlap --- for example \texttt{b\_burr} running two batches
+  at the same time on Monday. Such plans cannot be executed, and their apparent savings are not
+  real. The new method never does this and is proven optimal. The earlier method is therefore hidden
+  from users and kept only for developers' comparisons.
+
+  % ======================================================================
+  \RuleSection{Cold-room module (pilot)}
+  \label{sec:coldroom}
+
+  The cold-room module simulates one cold room over a period, in 5-minute steps:
+  \begin{itemize}
+    \item the room gains heat through its walls, in proportion to the insulation (U-value), the
+      surface and the difference with the outside temperature (hourly measurements, Trento);
+    \item a controller (proportional--derivative) sets the cooling power to keep the room near its
+      target and inside the allowed range; a minimum runtime avoids frequent on/off cycles;
+    \item cooling uses on-site production first; when there is a surplus, the room is cooled a little
+      further (``stores cold''); grid electricity is used only if allowed;
+    \item it can be linked to a cost simulation, so that the cold room only uses the production left
+      unused by the processes.
+  \end{itemize}
+
+  It reports the room temperature, the energy used and how much of it came from the grid. It does
+  not consider the price of electricity, and the conversion from heat to temperature uses a fixed
+  calibration coefficient, not the measured behaviour of a real room.
+
+  \begin{notebox}{Status}
+    Useful to explore ideas (for example: how much of the 9\,MWh/week of unused production a cold
+    room could absorb). Before its figures are used for decisions, the room model must be calibrated
+    against logged temperatures and electricity use of a real CONCAST cold room.
+  \end{notebox}
+
+  % ======================================================================
+  \RuleSection{Installing and running SPARC}
+  \label{sec:operating}
+
+  \subsection{Installation}
+
+  SPARC runs on one computer with \textbf{Docker Desktop} (Windows, macOS or Linux; its licence is
+  free only below a certain company size, so check it with IT) or, on a Linux server, with the free
+  Docker Engine. The software folder contains two launchers: \texttt{start} (double-click) installs
+  everything on the first run, starts SPARC and opens the browser; \texttt{stop} stops it. No
+  database, password file or command line is needed.
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}Y r@{}}
+  \toprule
+  \textbf{Operation} & \textbf{Time measured} \\
+  \midrule
+  First installation (download and preparation, once)          & a few minutes, depending on the network \\
+  First start with an empty database, CONCAST data loaded and examples calculated & 9\,s \\
+  Normal start or restart                                         & 2\,s \\
+  Optimise one week                                               & 0.5--2\,s \\
+  Cost simulation of one month, two plans                         & 0.2\,s \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Times measured on a development laptop with Docker Desktop.}
+  \end{table}
+
+  On the first start SPARC already contains the CONCAST data (both generation scenarios, prices
+  2024--2025, Trento temperatures, the reference week) and one calculated example of each function.
+  The default login (\texttt{admin}/\texttt{sparc}) must be changed at the first use. By default
+  SPARC can be opened only from the computer where it runs; a setting opens it to the plant
+  network.
+
+  \subsection{Using it}
+
+  The browser shows two areas:
+  \begin{itemize}
+    \item \textbf{Results}: a home page explaining the steps, the list of optimisations, cost
+      simulations and cold-room simulations with their charts, and each production week as a chart.
+      Anything not yet calculated has a \emph{Calculate now} button.
+    \item \textbf{Manage data}: forms to upload data and set up calculations, in the order of the
+      work (1 Input data, 2 Production plans and cost simulations, 3 Shift optimisation, 4 Cold
+      rooms). Each calculation has a \emph{Save and calculate} button and shows its result on the
+      same page. Uploaded files are checked (missing hours, wrong columns) and errors are explained
+      before anything is saved. When a setting changes, the old result is removed so that an
+      outdated figure is never shown.
+  \end{itemize}
+
+  \subsection{Data needed}
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{@{}L{3.2cm} L{2.6cm} Y@{}}
+  \toprule
+  \textbf{Data} & \textbf{Resolution} & \textbf{Content and source} \\
+  \midrule
+  On-site generation & hourly, CSV & kWh produced by the cogenerator and by the solar panels (plant metering; for planning: forecast) \\
+  Electricity prices & hourly, CSV & price paid per kWh bought (supplier contract or day-ahead market price plus fixed components) \\
+  Outside temperature & hourly, CSV & only for cold rooms (weather station or weather service) \\
+  Production plan & 15 minutes, CSV + YAML & which process runs when in a typical week; power of each process; how far each shift may move \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Inputs. The file formats are shown on the upload pages and in the README.}
+  \end{table}
+
+  \subsection{Proposed weekly routine}
+
+  \begin{enumerate}
+    \item \textbf{Thursday/Friday}: update the production plan of next week if it differs from the
+      typical week; upload the price and generation expectation for next week.
+    \item Create a shift optimisation for next week and press \emph{Save and optimise}
+      (seconds).
+    \item Production planning reviews the moved batches (list and weekly chart) against the rules
+      SPARC does not know; adjust and re-run if needed.
+    \item \textbf{After the week}: upload the actual generation and prices and run a cost
+      simulation of the plan that was used against the original one, to track the real saving.
+  \end{enumerate}
+
+  % ======================================================================
+  \RuleSection{Limitations and risks}
+  \label{sec:limits}
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabularx}{\textwidth}{@{}L{4.3cm} Y Y@{}}
+  \toprule
+  \textbf{Limitation} & \textbf{Effect} & \textbf{Mitigation} \\
+  \midrule
+  Dependencies between processes, cleaning times, staff are not modelled &
+    A proposed plan may be impossible to run as it is &
+    Review by production planning; add these rules to the model (simple extension) \\
+  Savings measured with perfect knowledge of each week &
+    Real savings will be lower, depending on forecast quality &
+    Weekly routine with forecasts; track the real saving after each week \\
+  Same typical week used for all 92 weeks &
+    Holidays, maintenance and changes in volume are not reflected &
+    Use the actual plan of each week when available \\
+  Only electricity bought is counted &
+    Unused production, power peaks, capacity charges and cogenerator fuel are not valued &
+    Add a value for exported energy and a peak-power charge if relevant to the contract \\
+  Power of each process is constant while it runs &
+    Real power profiles within a batch are smoothed &
+    Use measured profiles per process if available \\
+  Cold-room model not calibrated &
+    Temperatures and energies are indicative &
+    Calibrate on logged data before use \\
+  One computer, local database &
+    Data are lost if the computer is lost &
+    Regular backup of the SPARC data volume \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Main limitations of the current version.}
+  \end{table}
+
+  % ======================================================================
+  \newpage
+  \RuleSection{Recommendations and next steps}
+  \label{sec:next}
+
+  The actions are in order of priority. The first two are needed before plans proposed by SPARC are
+  used in production; the others increase the saving.
+
+  \begin{table}[H]
+  \small
+  \centering
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabularx}{\textwidth}{@{}L{0.5cm} Y L{3.2cm} L{2.6cm}@{}}
+  \toprule
+  & \textbf{Action} & \textbf{Expected benefit} & \textbf{Effort} \\
+  \midrule
+  1 & \textbf{Pilot of the weekly routine} for 8--12 weeks in spring/summer, with day-ahead prices
+      and a solar forecast; record the plan used and the real saving each week. &
+      Measures the share of the \Eur{4\,600}--\Eur{5\,100}/year that is reachable &
+      Low: planner time, data feeds \\
+  2 & \textbf{Workshop with production} to list the rules between processes (order, cleaning, staff)
+      and add them to the optimisation. &
+      Plans that can be used without manual correction & Low--medium \\
+  3 & \textbf{Review the movement windows} of the flexible processes, starting with \texttt{b\_past};
+      consider making more processes movable. &
+      See Table~\ref{tab:window} & Organisational \\
+  4 & \textbf{Value the unused production} (about 9\,MWh/week): export price, thermal storage or
+      cold rooms; add it to the cost if it can be sold. &
+      Larger than the shift saving if a use is found & Medium \\
+  5 & \textbf{Calibrate the cold-room model} on one instrumented room, then add price awareness. &
+      Reliable cold-room figures & Medium \\
+  6 & \textbf{Automatic data feeds} for prices and generation, and a scheduled weekly optimisation. &
+      Routine without manual uploads & Medium \\
+  \bottomrule
+  \end{tabularx}
+  \caption{Recommended actions, in order of priority.}
+  \end{table}
+
+  % ======================================================================
+  \appendix
+  \RuleSection{Appendix: optimisation model}
+  \label{app:model}
+
+  For engineers who want to check the method. The week is divided into steps $t=1,\dots,N$ of
+  5~minutes ($N=2016$). Each run $r$ has a demand profile $\bm{d}_r$ (kWh per step) and an activity
+  profile $\bm{a}_r$ (1 while it runs); $T_k$ shifts a profile by $k$ steps. Run $r$ may move by
+  $k \in \{-B_r,\dots,F_r\}$ (backward and forward limits of its shift). Generation $g_t$ and price
+  $\pi_t \ge 0$ are known. The binary $x_{r,k}$ is 1 when run $r$ is moved by $k$; $y_t \ge 0$ is the
+  energy bought at step $t$.
+  \begin{equation*}
+    \begin{aligned}
+      \min_{x,\,y}\quad & \sum_{t=1}^{N} \pi_t\, y_t \\
+      \text{s.t.}\quad & \sum_{k=-B_r}^{F_r} x_{r,k} = 1 && \text{every run } r \\
+      & \sum_{r}\sum_{k} x_{r,k}\,(T_k \bm{d}_r)_t - y_t \le g_t && \text{every step } t \\
+      & \sum_{r \in p}\sum_{k} x_{r,k}\,(T_k \bm{a}_r)_t \le 1 && \text{every process } p,\ \text{step } t \\
+      & x_{r,k} \in \{0,1\},\quad y_t \ge 0.
+    \end{aligned}
+  \end{equation*}
+  The second constraint with $y_t \ge 0$ makes $y_t$ equal to the energy bought,
+  $\max(0, D_t - g_t)$, at the optimum (prices are not negative); the third prevents two runs of the
+  same process from overlapping. The model is solved by HiGHS through \texttt{scipy.optimize.milp}
+  with a relative optimality gap of $10^{-4}$ and a 20-second limit; if no better schedule is found,
+  the original one is kept. Hourly generation is interpolated linearly to 5-minute steps; prices
+  are constant within the hour.
+
+  \RuleSection{Appendix: how the figures were produced}
+  \label{app:method}
+
+  \begin{itemize}
+    \item Data, in the \texttt{data} folder of the software:
+      \begin{itemize}
+        \item \texttt{generation.csv} and \texttt{generation\_fv3.csv}: 1 January 2024 -- 10 October 2025;
+        \item \texttt{prices.csv}: 2024--2025, from 0.076 to 0.365\,\euro/kWh, average 0.175\,\euro/kWh;
+        \item \texttt{production\_timetable.csv} and \texttt{production.yaml}: reference week and processes.
+      \end{itemize}
+    \item For each of the 92 full weeks and each generation file, the optimisation problem was built
+      exactly as the tool builds it (same 5-minute grid, run detection, interpolation) and solved with
+      the optimiser of the tool. Costs are those of the tool's cost function.
+    \item ``Reuse last week's plan'': the moves found for week $w-1$ applied to week $w$.
+      ``One plan per season'': the moves found for the 2024 week of median cost of each season,
+      applied to all weeks of that season in both years.
+    \item Per-year figures are the 92-week (or 91-week) totals divided by the number of weeks and
+      multiplied by 52. CO$_2$ uses the tool's factor of 0.5\,kg per kWh bought.
+    \item Local time is used throughout; the effect of the two daylight-saving changes per year is
+      negligible for these totals.
+    \item The scripts are in \texttt{report/analysis} (\texttt{benchmark.py}, \texttt{strategies.py},
+      \texttt{sensitivity.py}); the technical note on the optimisation explains the method in detail.
+  \end{itemize}
+
+  \end{document}

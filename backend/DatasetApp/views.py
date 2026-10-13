@@ -17,7 +17,7 @@ class TemperatureDatasetViewSet(viewsets.ModelViewSet):
     queryset = TemperatureDataset.objects.all()
     serializer_class = TemperatureDatasetSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active', 'name']
+    filterset_fields = ['name']
     search_fields = ['name']
     ordering_fields = ['created_at', 'name']
 
@@ -36,7 +36,7 @@ class PricesDatasetViewSet(viewsets.ModelViewSet):
     queryset = PricesDataset.objects.all()
     serializer_class = PricesDatasetSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active', 'name']
+    filterset_fields = ['name']
     search_fields = ['name']
     ordering_fields = ['created_at', 'name']
 
@@ -55,7 +55,7 @@ class GenerationDatasetViewSet(viewsets.ModelViewSet):
     queryset = GenerationDataset.objects.all()
     serializer_class = GenerationDatasetSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['is_active', 'name']
+    filterset_fields = ['name']
     search_fields = ['name']
     ordering_fields = ['created_at', 'name']
 

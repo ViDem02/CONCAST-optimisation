@@ -1,0 +1,11 @@
+{% extends "admin/change_form.html" %}
+
+{% block submit_buttons_bottom %}
+{% if not is_popup and has_change_permission or not is_popup and add %}
+<div class="submit-row sparc-run-row">
+  <input type="submit" value="{{ run_button_label }}" name="_run" class="default">
+  <p>Saves your changes and runs the calculation now (usually a few seconds). The result appears on this page.</p>
+</div>
+{% endif %}
+{{ block.super }}
+{% endblock %}

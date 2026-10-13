@@ -1,0 +1,15 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+<div class="module sparc-guide">
+  <h2>How to use SPARC</h2>
+  <ol>
+    <li><strong>Input data</strong> — upload the hourly on-site generation, the electricity prices and (for cold rooms) the outside temperature as CSV files. The CONCAST data are already loaded.</li>
+    <li><strong>Production plans</strong> — import a weekly plan (CSV timetable + YAML) and set, per shift, how many minutes it may start earlier or later.</li>
+    <li><strong>Shift optimisation</strong> — pick a plan and a reference week, then press <em>Save and calculate</em>. A new, optimised plan is created.</li>
+    <li><strong>Cost simulations</strong> — compare the current and the optimised plan over any period (for example a whole season) to check the savings hold.</li>
+  </ol>
+  <p>Charts of every result are on the <a href="{{ site_url }}">results website</a>.</p>
+</div>
+{{ block.super }}
+{% endblock %}

@@ -1,36 +1,25 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-# Create media directory with correct permissions
-RUN mkdir -p /app/media && chmod 755 /app/media
-
-# Install system dependencies for mysqlclient and locales
-RUN apt-get update && apt-get install -y \
-    gcc \
-    default-libmysqlclient-dev \
-    pkg-config \
-    locales \
-    && rm -rf /var/lib/apt/lists/*
-
-# Generate Italian locale
-RUN sed -i '/it_IT.UTF-8/s/^# //g' /etc/locale.gen && \
-    locale-gen it_IT.UTF-8
-
-# Set environment variables
-ENV LANG=it_IT.UTF-8
-ENV LANGUAGE=it_IT:it
-ENV LC_ALL=it_IT.UTF-8
-ENV PYTHONUNBUFFERED=1
-
-# Install Python dependencies
+# Dependencies first, so code changes do not reinstall them
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Copy application code
-COPY . /app/
+COPY . .
+
+# Admin styles are collected once, when the image is built
+RUN DJANGO_SECRET_KEY=build-only python manage.py collectstatic --noinput --verbosity 0 \
+    && chmod +x docker-entrypoint.sh
+
+# Database and secret key live in the /data volume; the example data are mounted in /app/demo_data
+ENV SQLITE_PATH=/data/sparc.sqlite3 \
+    SPARC_DEMO_DATA=/app/demo_data
 
 EXPOSE 8000
-
-# Command will be overridden by docker-compose
-CMD ["gunicorn", "simulator_project.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

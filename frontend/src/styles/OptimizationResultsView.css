@@ -254,25 +254,22 @@
 
 /* Production Plans Section */
 .production-plans-section {
-  margin-top: 3rem;
+  margin-top: 2rem;
 }
 
 .production-plans-section h3 {
-  margin: 0 0 2rem 0;
+  margin: 0 0 1rem 0;
   color: #1a1a1a;
-  font-size: 1.5rem;
+  font-size: 1.35rem;
 }
 
 .plans-comparison {
   display: grid;
-  gap: 2rem;
+  gap: 1rem;
 }
 
-.plan-gantt {
-  background: white;
-  border-radius: 12px;
-  padding: 1.5rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+.plan-gantt .shifts-gantt {
+  margin: 0;
 }
 
 .plan-gantt h4 {

@@ -46,7 +46,7 @@ Simulation configuration and results:
 - `chiller_power_delivery`: JSON results for power consumption
 - `calculated_temperature`: JSON results for temperature evolution
 
-**Note**: Heating rate is now calculated dynamically from the active `TemperatureDataset` using the chiller's insulation properties.
+**Note**: Heating rate is now calculated dynamically from the simulation's `TemperatureDataset` using the chiller's insulation properties.
 
 ## Usage
 
@@ -101,7 +101,7 @@ new_temp = current_temp + (heating_rate × dt) - (cooling_power × coefficient �
 Where:
 - `U` = insulation_u_value (W/m²·K) from Chiller model
 - `A` = surface_area (m²) from Chiller model
-- `ΔT` = outside_temp - current_temp (from active TemperatureDataset)
+- `ΔT` = outside_temp - current_temp (from the simulation's TemperatureDataset)
 - `thermal_mass_coefficient` = 0.0001 (calibration factor)
 
 This provides realistic heating based on:
@@ -168,11 +168,10 @@ Where:
 Required for ChillersApp:
 - `numpy` - Array operations and calculations
 - `scipy` - Not directly used yet but available for optimization
-- `matplotlib` - Plotting (optional, for `generate_chiller_plots`)
+- `matplotlib` - Plotting (optional, not installed in Docker; only needed by `generate_chiller_plots`)
 
-**Required Active Datasets**:
-- `GenerationDataset` - Solar and cogeneration data
-- `PricesDataset` - Electricity and methane prices
+**Datasets chosen in each simulation**:
+- `GenerationDataset` - Solar and cogeneration data (not needed when a cost simulation is linked: its unused generation is used instead)
 - `TemperatureDataset` - Outside temperature data (used for heating rate calculation)
 
 ## Configuration
@@ -218,7 +217,7 @@ if wasted_energy[i] > 5 and current_temp > simulation.min_temperature:
 
 ## Notes
 
-- Ensure active `GenerationDataset` and `PricesDataset` exist before running
+- Choose the generation and temperature datasets in the simulation before running
 - Simulation period must be covered by available data
 - Initial window allows temperature violations during startup
 - Results stored in JSON fields for flexibility

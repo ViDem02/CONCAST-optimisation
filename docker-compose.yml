@@ -1,84 +1,40 @@
-version: '3.8'
+# SPARC: start with `docker compose up -d` (or double-click start.command / start.bat)
+# and open http://localhost:3000. Optional settings are in .env (see .env.example).
+name: sparc
 
 services:
-  db:
-    image: mariadb:10.11
-    container_name: concast_db
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${DB_NAME:-concast_db}
-      MYSQL_USER: ${DB_USER:-concast_user}
-      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
-    volumes:
-      - mariadb_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - concast_network
-
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: concast_backend
+    build: ./backend
+    image: sparc-backend
     restart: unless-stopped
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             gunicorn simulator_project.wsgi:application --bind 0.0.0.0:8000 --workers 3"
     environment:
-      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
-      - DEBUG=${DEBUG:-False}
-      - IS_DOCKER=1
-      - DB_NAME=${DB_NAME:-concast_db}
-      - DB_USER=${DB_USER:-concast_user}
-      - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD}
-      - DB_HOST=db
-      - DB_PORT=3306
-      - MEDIA_ROOT=/app/media
-      - SESSION_EXPIRE_AT_BROWSER_CLOSE=False
-      - ALLOWED_HOSTS=backend localhost 127.0.0.1
-      - USE_HTTPS=${USE_HTTPS:-False}
+      # Only reachable through the website container, which checks the address
+      ALLOWED_HOSTS: "*"
+      SPARC_ADMIN_USER: ${SPARC_ADMIN_USER:-admin}
+      SPARC_ADMIN_PASSWORD: ${SPARC_ADMIN_PASSWORD:-sparc}
+      USE_HTTPS: ${USE_HTTPS:-False}
     volumes:
-      - ./backend:/app
-      - media_files:/app/media
-      - static_files:/app/staticfiles
-    ports:
-      - "127.0.0.1:8000:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - concast_network
+      - sparc_data:/data                  # Database and secret key
+      - ./data:/app/demo_data:ro          # CONCAST data, loaded on the first start
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/login/', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+      start_interval: 1s
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: concast_frontend
+    build: ./frontend
+    image: sparc-frontend
     restart: unless-stopped
-    environment:
-      - VITE_API_URL=http://localhost:8000
     ports:
-      - "3000:80"
+      # 127.0.0.1 = this computer only. Set SPARC_HOST=0.0.0.0 in .env to open it to the network
+      # (and change the admin password first).
+      - "${SPARC_HOST:-127.0.0.1}:${SPARC_PORT:-3000}:80"
     depends_on:
-      - backend
-    networks:
-      - concast_network
+      backend:
+        condition: service_healthy
 
 volumes:
-  mariadb_data:
-    name: concast_mariadb_data
-  media_files:
-    name: concast_media_files
-  static_files:
-    name: concast_static_files
-
-networks:
-  concast_network:
-    name: concast_network
-    driver: bridge
+  sparc_data:

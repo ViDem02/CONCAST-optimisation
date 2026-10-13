@@ -1,103 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { chillerApi } from '../services/api';
-import '../styles/SimulationsList.css';
+import { adminUrl, chillerApi, errorMessage } from '../services/api';
+import { ErrorBox, formatDate, Loading, PageHeader, RunButton, StatusBadge } from './common';
 
 function ChillerSimulationsList() {
   const navigate = useNavigate();
-  const [simulations, setSimulations] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [simulations, setSimulations] = useState(null);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    fetchSimulations();
-  }, []);
-
-  const fetchSimulations = async () => {
+  const load = async () => {
     try {
-      setLoading(true);
-      const response = await chillerApi.listSimulations();
-      // API returns paginated response with 'results' array
-      setSimulations(response.data.results || response.data);
       setError(null);
+      setSimulations(await chillerApi.list());
     } catch (err) {
-      setError('Failed to load chiller simulations: ' + err.message);
-    } finally {
-      setLoading(false);
+      setError('Could not load the cold-room simulations: ' + errorMessage(err));
     }
   };
 
-  const handleSimulationClick = (id) => {
-    navigate(`/chiller-results/${id}`);
-  };
+  useEffect(() => { load(); }, []);
 
-  if (loading) {
-    return <div className="loading">Loading chiller simulations...</div>;
-  }
-
-  if (error) {
-    return (
-      <div className="error-container">
-        <p className="error">{error}</p>
-        <button onClick={fetchSimulations}>Retry</button>
-      </div>
-    );
-  }
-
-  if (simulations.length === 0) {
-    return (
-      <div className="empty-state">
-        <h3>No Chiller Simulations Available</h3>
-        <p>No chiller simulation results have been calculated yet.</p>
-        <p>Run chiller simulations using the Django admin or management commands to see results here.</p>
-      </div>
-    );
-  }
+  if (error) return <ErrorBox message={error} onRetry={load} />;
+  if (!simulations) return <Loading what="cold-room simulations" />;
 
   return (
-    <div className="simulations-list">
-      <h2>Chiller Simulation Results</h2>
-      <p className="subtitle">Select a simulation to view temperature control and power consumption</p>
-      
-      <div className="simulations-grid">
-        {simulations.map((simulation) => (
-          <button
-            key={simulation.id}
-            className="simulation-card"
-            onClick={() => handleSimulationClick(simulation.id)}
-          >
-            <div className="card-header">
-              <h3>{simulation.name}</h3>
-              <span className="simulation-id">ID: {simulation.id}</span>
+    <div>
+      <PageHeader
+        title="Cold rooms"
+        subtitle="Simulates a cold room kept within its temperature range, cooling first with solar and cogeneration and pre-cooling when there is surplus."
+      >
+        <a className="btn btn-secondary" href={adminUrl('ChillersApp/chiller/')}>Cold rooms</a>
+        <a className="btn btn-primary" href={adminUrl('ChillersApp/chillersimulation/add/')}>+ New cold-room simulation</a>
+      </PageHeader>
+
+      {simulations.length === 0 ? (
+        <div className="empty-state">
+          <h3>No cold-room simulations yet</h3>
+          <p>First describe a cold room (size, insulation, refrigeration unit), then create a simulation for it.</p>
+        </div>
+      ) : (
+        <div className="card-list">
+          {simulations.map((s) => (
+            <div key={s.id} className="item-card" onClick={() => navigate(`/cold-rooms/${s.id}`)}>
+              <div className="card-title">
+                <h3>{s.name}</h3>
+                <StatusBadge done={s.has_results} />
+              </div>
+              <dl>
+                <dt>Cold room</dt><dd>{s.chiller_name}</dd>
+                <dt>Period</dt><dd>{formatDate(s.start_date)} – {formatDate(s.end_date)}</dd>
+                <dt>Allowed temperature</dt><dd>{s.min_temperature} to {s.max_temperature} °C</dd>
+                {s.production_plan_name && <><dt>Uses the surplus of</dt><dd>{s.production_plan_name}</dd></>}
+              </dl>
+              {!s.has_results && <RunButton run={() => chillerApi.run(s.id)} onDone={load} />}
             </div>
-            <div className="card-body">
-              <div className="info-row">
-                <span className="label">Chiller:</span>
-                <span className="value">{simulation.chiller_name}</span>
-              </div>
-              <div className="info-row">
-                <span className="label">Period:</span>
-                <span className="value">{simulation.start_date} to {simulation.end_date}</span>
-              </div>
-              <div className="info-row">
-                <span className="label">Temperature Range:</span>
-                <span className="value">{simulation.min_temperature}°C - {simulation.max_temperature}°C</span>
-              </div>
-              <div className="info-row">
-                <span className="label">Status:</span>
-                <span className={`value ${simulation.has_results ? 'highlight' : ''}`}>
-                  {simulation.has_results ? '✓ Has Results' : '✗ No Results'}
-                </span>
-              </div>
-            </div>
-            <div className="card-footer">
-              <span className="view-link">
-                {simulation.has_results ? 'View Details →' : 'Run Simulation First'}
-              </span>
-            </div>
-          </button>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

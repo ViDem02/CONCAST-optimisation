@@ -112,54 +112,51 @@ def detect_shift_runs(activity_vector):
 
 def build_production_matrix(production_plan, timesteps):
     """
-    Build production matrix (like simulator.m): N x nPhases where N = timesteps.
-    Each column represents a process with its complete activity pattern.
-    
-    This follows the MATLAB approach where each process gets one column initially,
-    and we'll expand to multiple runs per process later.
-    
+    Build production matrix (like simulator.m): one row per process, one column per timestep.
+
+    Each process gets one row initially; expand_phases_to_runs later splits it
+    into its runs. The allowed movement is read from the shifts, per timestep,
+    so that every run can take the tolerance of the shift it comes from.
+
     Returns:
-        Tuple of (phase_active, phase_info) where:
+        Tuple of (phase_active, phase_info, forward_steps, backward_steps) where:
         - phase_active: numpy array of shape (nPhases, N) with binary activity
         - phase_info: list of dicts with process info for each phase
+        - forward_steps, backward_steps: (nPhases, N) int arrays, allowed delay /
+          advance in steps of the shifts active at each timestep (smallest one
+          when shifts touch)
     """
-    from SimulationApp.simulation import is_timestep_in_shift
+    from SimulationApp.simulation import minutes_of_week, shift_activity
     
-    processes = production_plan.processes.all()
+    processes = list(production_plan.processes.prefetch_related('shifts'))
     nPhases = len(processes)
     N = len(timesteps)
+    week_minutes = minutes_of_week(timesteps)
     
-    # Build activity matrix: nPhases x N
     phase_active = np.zeros((nPhases, N))
+    forward_steps = np.full((nPhases, N), np.iinfo(np.int64).max, dtype=np.int64)
+    backward_steps = np.full((nPhases, N), np.iinfo(np.int64).max, dtype=np.int64)
     phase_info = []
     
     for phase_idx, process in enumerate(processes):
-        # Get all shifts for this process
-        shifts = process.shifts.all()
-        
-        # Mark timesteps where process is active
-        for shift in shifts:
-            for i, ts in enumerate(timesteps):
-                if is_timestep_in_shift(ts, shift):
-                    phase_active[phase_idx, i] = 1
-        
-        # Get shift limits (assume all shifts in process have same limits)
-        shift = shifts.first()
-        max_forward_steps = shift.max_forward_minutes // TIMESTEP_MINUTES if shift else 24
-        max_backward_steps = shift.max_backwards_minutes // TIMESTEP_MINUTES if shift else 24
+        for shift in process.shifts.all():
+            active = shift_activity(week_minutes, shift)
+            phase_active[phase_idx, active] = 1
+            forward_steps[phase_idx, active] = np.minimum(
+                forward_steps[phase_idx, active], shift.max_forward_minutes // TIMESTEP_MINUTES)
+            backward_steps[phase_idx, active] = np.minimum(
+                backward_steps[phase_idx, active], shift.max_backwards_minutes // TIMESTEP_MINUTES)
         
         phase_info.append({
             'process_id': process.id,
             'process_name': process.name,
             'electricity_consumption_kWh': process.electricity_consumption_kWh,
-            'max_forward_steps': max_forward_steps,
-            'max_backward_steps': max_backward_steps
         })
     
-    return phase_active, phase_info
+    return phase_active, phase_info, forward_steps, backward_steps
 
 
-def expand_phases_to_runs(phase_active, phase_info):
+def expand_phases_to_runs(phase_active, phase_info, forward_steps, backward_steps):
     """
     Expand phases to multiple runs (like simulator.m does).
     Each contiguous run of activity becomes an independent optimizable unit.
@@ -167,6 +164,7 @@ def expand_phases_to_runs(phase_active, phase_info):
     Args:
         phase_active: nPhases x N binary matrix
         phase_info: list of phase information dicts
+        forward_steps, backward_steps: nPhases x N allowed delay / advance (see build_production_matrix)
     
     Returns:
         Tuple of (expanded_active, expanded_info, expanded_names) where:
@@ -206,8 +204,8 @@ def expand_phases_to_runs(phase_active, phase_info):
                 'electricity_consumption_kWh': info['electricity_consumption_kWh'],
                 'original_start': start,
                 'original_end': end,
-                'max_forward_steps': info['max_forward_steps'],
-                'max_backward_steps': info['max_backward_steps']
+                'max_forward_steps': int(forward_steps[phase_idx, start:end + 1].min()),
+                'max_backward_steps': int(backward_steps[phase_idx, start:end + 1].min())
             })
     
     # Stack into matrix: nRuns x N
@@ -234,6 +232,9 @@ def run_optimization(optimization_id):
     
     optimization = Optimization.objects.get(id=optimization_id)
     optimizer = get_optimizer(optimization.optimizer)
+    if (optimization.reference_week_end - optimization.reference_week_start).days != 6:
+        raise ValueError("The reference period must be exactly one week (7 days), "
+                         "otherwise the optimised weekly plan would miss or repeat shifts")
     
     # Get datasets from optimization object
     generation_dataset = optimization.generation_dataset
@@ -261,7 +262,7 @@ def run_optimization(optimization_id):
     ).order_by('timestamp')
     
     if not generation_records.exists() or not prices_records.exists():
-        raise ValueError("Insufficient data coverage for reference week")
+        raise ValueError("The generation or prices data do not cover the reference week")
     
     # Build 5-minute timestep vector
     timesteps, _ = retime_hourly_to_5min([], start_time, end_time)
@@ -269,13 +270,14 @@ def run_optimization(optimization_id):
     dt_h = TIMESTEP_MINUTES / 60.0  # Hours per step
     
     # Build production matrix: nPhases x N (following simulator.m approach)
-    phase_active, phase_info = build_production_matrix(
+    phase_active, phase_info, forward_steps, backward_steps = build_production_matrix(
         optimization.reference_production_plan,
         timesteps
     )
     
     # Expand to multiple runs per phase (like simulator.m does)
-    phase_active, phase_info, phase_names = expand_phases_to_runs(phase_active, phase_info)
+    phase_active, phase_info, phase_names = expand_phases_to_runs(
+        phase_active, phase_info, forward_steps, backward_steps)
     nPhases = len(phase_info)  # Total number of phase-runs
     
     if nPhases == 0:

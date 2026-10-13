@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.core.validators import MinValueValidator
 from PlanningApp.models import WeeklyProductionPlan
@@ -12,7 +15,6 @@ class Optimization(models.Model):
     by shifting process shifts within allowed time windows to minimize costs.
     """
     name = models.CharField(max_length=255, unique=True)
-    notes = models.TextField(blank=True, help_text="Additional notes about this optimization")
     
     optimizer = models.CharField(
         max_length=50,
@@ -25,7 +27,8 @@ class Optimization(models.Model):
         WeeklyProductionPlan,
         on_delete=models.PROTECT,
         related_name='optimizations_as_reference',
-        help_text="The original production plan to optimize"
+        verbose_name='plan to optimise',
+        help_text="The production plan whose flexible shifts will be moved"
     )
     
     optimized_production_plan = models.ForeignKey(
@@ -34,36 +37,45 @@ class Optimization(models.Model):
         null=True,
         blank=True,
         related_name='optimizations_as_result',
-        help_text="The resulting optimized production plan (created after optimization)"
+        verbose_name='optimised plan',
+        help_text="The new production plan written by the optimisation"
     )
     
     optimized_plan_name = models.CharField(
         max_length=255,
         blank=True,
-        help_text="Name for the optimized production plan (if empty, auto-generates from reference plan name)"
+        verbose_name='name of the optimised plan',
+        help_text="Leave empty to use the name of the plan to optimise followed by \"_optimized\""
     )
     
     reference_week_start = models.DateField(
-        help_text="Start date of the reference week for generation and prices data"
+        verbose_name='reference week: first day',
+        help_text="Usually a Monday. The solar/cogeneration and prices of this week are used to choose the shifts"
     )
     
     reference_week_end = models.DateField(
-        help_text="End date of the reference week for generation and prices data"
+        blank=True,
+        verbose_name='reference week: last day',
+        help_text="Leave empty: it is set to 6 days after the first day"
     )
     
     generation_dataset = models.ForeignKey(
         'DatasetApp.GenerationDataset',
         on_delete=models.PROTECT,
-        help_text="Generation dataset to use for optimization",
+        verbose_name='on-site generation',
+        help_text="Solar and cogeneration data to use",
         null=True,
     )
     
     prices_dataset = models.ForeignKey(
         'DatasetApp.PricesDataset',
         on_delete=models.PROTECT,
-        help_text="Prices dataset to use for optimization",
+        verbose_name='electricity prices',
+        help_text="Grid electricity prices to use",
         null=True,
     )
+    
+    notes = models.TextField(blank=True, help_text="Optional notes")
     
     # Optimization results
     initial_cost_euros = models.FloatField(
@@ -103,9 +115,18 @@ class Optimization(models.Model):
     
     class Meta:
         ordering = ['-created_at']
+        verbose_name = 'shift optimisation'
     
     def __str__(self):
         return f"{self.name}"
+    
+    def clean(self):
+        if self.reference_week_start and not self.reference_week_end:
+            self.reference_week_end = self.reference_week_start + timedelta(days=6)
+        if self.reference_week_start and self.reference_week_end \
+                and (self.reference_week_end - self.reference_week_start).days != 6:
+            raise ValidationError({'reference_week_end': 'The reference period must be exactly one week: '
+                                                         'leave this empty or choose the day 6 days after the first day.'})
     
     def is_completed(self):
         """Check if optimization has been completed."""

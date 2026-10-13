@@ -1,300 +1,167 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  LineChart,
-  Line,
-  AreaChart,
-  Area,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import '../styles/ResultsCharts.css';
 
+// Energies and costs are added up over the chosen period; the price is averaged
+const SUMMED = ['total_demand_kWh', 'original_demand_kWh', 'solar_generation_kWh', 'cogen_generation_kWh',
+                'total_generation_kWh', 'grid_electricity_kWh', 'original_grid_electricity_kWh',
+                'wasted_energy_kWh', 'original_cost_euros', 'optimized_cost_euros', 'grid_cost_euros'];
+const AVERAGED = ['electricity_price'];
+
+const RESOLUTIONS = {
+  all: { label: '5 minutes', unit: 'per 5 min', key: (t) => t },
+  hourly: { label: 'Hourly', unit: 'per hour', key: (t) => t.substring(0, 13) },
+  daily: { label: 'Daily', unit: 'per day', key: (t) => t.substring(0, 10) },
+};
+
+/** Default resolution: about a few hundred to a thousand points whatever the period. */
+const defaultResolution = (steps) => (steps <= 3 * 288 ? 'all' : steps <= 45 * 288 ? 'hourly' : 'daily');
+
+function aggregate(data, resolution) {
+  const timestamps = data.timestamps;
+  const keys = [...SUMMED, ...AVERAGED].filter((k) => Array.isArray(data[k]));
+  const groups = new Map();
+  timestamps.forEach((timestamp, i) => {
+    const groupKey = RESOLUTIONS[resolution].key(timestamp);
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = { timestamp, count: 0 };
+      keys.forEach((k) => { group[k] = 0; });
+      groups.set(groupKey, group);
+    }
+    group.count += 1;
+    keys.forEach((k) => { group[k] += data[k][i] || 0; });
+  });
+  return [...groups.values()].map((group) => {
+    AVERAGED.forEach((k) => { if (k in group) group[k] /= group.count; });
+    return group;
+  });
+}
+
 function ResultsCharts({ timestepData }) {
-  const [chartType, setChartType] = useState('electricity');
-  const [dataResolution, setDataResolution] = useState('all'); // 'all', 'hourly', 'daily'
+  const compared = Array.isArray(timestepData.original_demand_kWh);
+  const [chart, setChart] = useState(compared ? 'comparison' : 'electricity');
+  const [resolution, setResolution] = useState(defaultResolution(timestepData.timestamps.length));
+  const points = useMemo(() => aggregate(timestepData, resolution), [timestepData, resolution]);
+  const unit = RESOLUTIONS[resolution].unit;
 
-  // Process data based on resolution
-  const processData = () => {
-    let data = timestepData;
-
-    if (dataResolution === 'hourly') {
-      // Aggregate by hour
-      const hourlyData = {};
-      data.forEach((point) => {
-        const hourKey = point.timestamp.substring(0, 13) + ':00:00'; // Round to hour
-        if (!hourlyData[hourKey]) {
-          hourlyData[hourKey] = {
-            timestamp: hourKey,
-            total_demand_kWh: 0,
-            solar_generation_kWh: 0,
-            cogen_generation_kWh: 0,
-            grid_electricity_kWh: 0,
-            wasted_energy_kWh: 0,
-            grid_cost_euros: 0,
-            count: 0,
-          };
-        }
-        hourlyData[hourKey].total_demand_kWh += point.total_demand_kWh || 0;
-        hourlyData[hourKey].solar_generation_kWh += point.solar_generation_kWh || 0;
-        hourlyData[hourKey].cogen_generation_kWh += point.cogen_generation_kWh || 0;
-        hourlyData[hourKey].grid_electricity_kWh += point.grid_electricity_kWh || 0;
-        hourlyData[hourKey].wasted_energy_kWh += point.wasted_energy_kWh || 0;
-        hourlyData[hourKey].grid_cost_euros += point.grid_cost_euros || 0;
-        hourlyData[hourKey].count += 1;
-      });
-      data = Object.values(hourlyData);
-    } else if (dataResolution === 'daily') {
-      // Aggregate by day
-      const dailyData = {};
-      data.forEach((point) => {
-        const dayKey = point.timestamp.substring(0, 10); // Date only
-        if (!dailyData[dayKey]) {
-          dailyData[dayKey] = {
-            timestamp: dayKey,
-            total_demand_kWh: 0,
-            solar_generation_kWh: 0,
-            cogen_generation_kWh: 0,
-            grid_electricity_kWh: 0,
-            wasted_energy_kWh: 0,
-            grid_cost_euros: 0,
-            count: 0,
-          };
-        }
-        dailyData[dayKey].total_demand_kWh += point.total_demand_kWh || 0;
-        dailyData[dayKey].solar_generation_kWh += point.solar_generation_kWh || 0;
-        dailyData[dayKey].cogen_generation_kWh += point.cogen_generation_kWh || 0;
-        dailyData[dayKey].grid_electricity_kWh += point.grid_electricity_kWh || 0;
-        dailyData[dayKey].wasted_energy_kWh += point.wasted_energy_kWh || 0;
-        dailyData[dayKey].grid_cost_euros += point.grid_cost_euros || 0;
-        dailyData[dayKey].count += 1;
-      });
-      data = Object.values(dailyData);
-    }
-
-    // Limit data points for performance
-    if (data.length > 1000 && dataResolution === 'all') {
-      // Sample every nth point
-      const step = Math.ceil(data.length / 1000);
-      data = data.filter((_, index) => index % step === 0);
-    }
-
-    return data;
-  };
-
-  const chartData = processData();
-
-  const formatTimestamp = (timestamp) => {
+  const formatTime = (timestamp) => {
     const date = new Date(timestamp);
-    if (dataResolution === 'daily') {
-      return date.toLocaleDateString();
-    } else if (dataResolution === 'hourly') {
-      return date.toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-      });
-    }
-    return date.toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    if (resolution === 'daily') return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    return date.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   };
+  const axis = (
+    <XAxis dataKey="timestamp" tickFormatter={formatTime} angle={-35} textAnchor="end" height={70} minTickGap={20} />
+  );
+  const tooltip = (suffix, decimals = 1) => (
+    <Tooltip labelFormatter={formatTime} formatter={(value, name) => [`${Number(value).toFixed(decimals)} ${suffix}`, name]} />
+  );
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="custom-tooltip">
-          <p className="tooltip-label">{formatTimestamp(label)}</p>
-          {payload.map((entry, index) => (
-            <p key={index} style={{ color: entry.color }}>
-              {entry.name}: {Number(entry.value).toFixed(2)} {entry.unit || 'kWh'}
-            </p>
-          ))}
-        </div>
-      );
-    }
-    return null;
+  const charts = {
+    comparison: {
+      title: 'Production demand of the two plans against on-site generation',
+      note: 'Where the compared plan follows the generation more closely, less electricity is bought from the grid.',
+      render: () => (
+        <LineChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {axis}
+          <YAxis label={{ value: `kWh ${unit}`, angle: -90, position: 'insideLeft' }} />
+          {tooltip('kWh')}
+          <Legend />
+          <Line type="stepAfter" dataKey="total_generation_kWh" stroke="#16a34a" strokeWidth={2} dot={false} name="On-site generation" />
+          <Line type="stepAfter" dataKey="original_demand_kWh" stroke="#94a3b8" strokeWidth={2} dot={false} name="Demand, current plan" />
+          <Line type="stepAfter" dataKey="total_demand_kWh" stroke="#2563eb" strokeWidth={2} dot={false} name="Demand, compared plan" />
+        </LineChart>
+      ),
+    },
+    electricity: {
+      title: compared ? 'Electricity demand and supply (compared plan)' : 'Electricity demand and supply',
+      note: 'Demand is covered first by solar and cogeneration; the rest is bought from the grid.',
+      render: () => (
+        <AreaChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {axis}
+          <YAxis label={{ value: `kWh ${unit}`, angle: -90, position: 'insideLeft' }} />
+          {tooltip('kWh')}
+          <Legend />
+          <Area type="stepAfter" dataKey="cogen_generation_kWh" stackId="supply" stroke="#16a34a" fill="#86efac" name="Cogeneration" />
+          <Area type="stepAfter" dataKey="solar_generation_kWh" stackId="supply" stroke="#ca8a04" fill="#fde68a" name="Solar" />
+          <Area type="stepAfter" dataKey="grid_electricity_kWh" stroke="#7c3aed" fill="#c4b5fd" name="Bought from the grid" />
+          <Area type="stepAfter" dataKey="total_demand_kWh" stroke="#0f172a" fill="none" strokeWidth={2} name="Demand" />
+        </AreaChart>
+      ),
+    },
+    cost: {
+      title: 'Cost of the electricity bought from the grid',
+      render: () => (
+        <BarChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {axis}
+          <YAxis label={{ value: `€ ${unit}`, angle: -90, position: 'insideLeft' }} />
+          {tooltip('€', 2)}
+          <Legend />
+          {compared ? <>
+            <Bar dataKey="original_cost_euros" fill="#94a3b8" name="Current plan" />
+            <Bar dataKey="optimized_cost_euros" fill="#2563eb" name="Compared plan" />
+          </> : <Bar dataKey="grid_cost_euros" fill="#2563eb" name="Grid cost" />}
+        </BarChart>
+      ),
+    },
+    price: {
+      title: 'Grid electricity price',
+      render: () => (
+        <LineChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {axis}
+          <YAxis label={{ value: '€/kWh', angle: -90, position: 'insideLeft' }} />
+          {tooltip('€/kWh', 4)}
+          <Line type="stepAfter" dataKey="electricity_price" stroke="#ea580c" strokeWidth={2} dot={false} name="Price" />
+        </LineChart>
+      ),
+    },
+    waste: {
+      title: 'On-site production left unused',
+      note: 'Electricity produced on site when production does not need it. It is not credited in the cost.',
+      render: () => (
+        <AreaChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" />
+          {axis}
+          <YAxis label={{ value: `kWh ${unit}`, angle: -90, position: 'insideLeft' }} />
+          {tooltip('kWh')}
+          <Area type="stepAfter" dataKey="wasted_energy_kWh" stroke="#dc2626" fill="#fecaca" name="Unused production" />
+        </AreaChart>
+      ),
+    },
   };
-
-  const renderElectricityChart = () => (
-    <ResponsiveContainer width="100%" height={400}>
-      <AreaChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis
-          dataKey="timestamp"
-          tickFormatter={formatTimestamp}
-          angle={-45}
-          textAnchor="end"
-          height={80}
-        />
-        <YAxis label={{ value: 'Energy (kWh)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip content={<CustomTooltip />} />
-        <Legend />
-        <Area
-          type="monotone"
-          dataKey="total_demand_kWh"
-          stackId="1"
-          stroke="#ff7300"
-          fill="#ff7300"
-          name="Total Demand"
-        />
-        <Area
-          type="monotone"
-          dataKey="solar_generation_kWh"
-          stackId="2"
-          stroke="#ffc658"
-          fill="#ffc658"
-          name="Solar Generation"
-        />
-        <Area
-          type="monotone"
-          dataKey="cogen_generation_kWh"
-          stackId="2"
-          stroke="#82ca9d"
-          fill="#82ca9d"
-          name="Cogen Generation"
-        />
-        <Area
-          type="monotone"
-          dataKey="grid_electricity_kWh"
-          stackId="2"
-          stroke="#8884d8"
-          fill="#8884d8"
-          name="Grid Electricity"
-        />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-
-  const renderGenerationChart = () => (
-    <ResponsiveContainer width="100%" height={400}>
-      <LineChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis
-          dataKey="timestamp"
-          tickFormatter={formatTimestamp}
-          angle={-45}
-          textAnchor="end"
-          height={80}
-        />
-        <YAxis label={{ value: 'Energy (kWh)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip content={<CustomTooltip />} />
-        <Legend />
-        <Line
-          type="monotone"
-          dataKey="solar_generation_kWh"
-          stroke="#ffc658"
-          name="Solar Generation"
-          dot={false}
-        />
-        <Line
-          type="monotone"
-          dataKey="cogen_generation_kWh"
-          stroke="#82ca9d"
-          name="Cogen Generation"
-          dot={false}
-        />
-        <Line
-          type="monotone"
-          dataKey="total_generation_kWh"
-          stroke="#8884d8"
-          name="Total Generation"
-          dot={false}
-        />
-      </LineChart>
-    </ResponsiveContainer>
-  );
-
-  const renderCostChart = () => (
-    <ResponsiveContainer width="100%" height={400}>
-      <BarChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis
-          dataKey="timestamp"
-          tickFormatter={formatTimestamp}
-          angle={-45}
-          textAnchor="end"
-          height={80}
-        />
-        <YAxis label={{ value: 'Cost (€)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip content={<CustomTooltip />} />
-        <Legend />
-        <Bar dataKey="grid_cost_euros" fill="#8884d8" name="Grid Cost" />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-
-  const renderWasteChart = () => (
-    <ResponsiveContainer width="100%" height={400}>
-      <AreaChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis
-          dataKey="timestamp"
-          tickFormatter={formatTimestamp}
-          angle={-45}
-          textAnchor="end"
-          height={80}
-        />
-        <YAxis label={{ value: 'Energy (kWh)', angle: -90, position: 'insideLeft' }} />
-        <Tooltip content={<CustomTooltip />} />
-        <Legend />
-        <Area
-          type="monotone"
-          dataKey="wasted_energy_kWh"
-          stroke="#ff0000"
-          fill="#ff000066"
-          name="Wasted Energy"
-        />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
+  if (!compared) delete charts.comparison;
+  const current = charts[chart];
 
   return (
     <div className="results-charts">
-      <div className="charts-controls">
-        <div className="control-group">
-          <label>Chart Type:</label>
-          <select value={chartType} onChange={(e) => setChartType(e.target.value)}>
-            <option value="electricity">Electricity Flow</option>
-            <option value="generation">Generation Sources</option>
-            <option value="cost">Grid Costs</option>
-            <option value="waste">Wasted Energy</option>
+      <div className="chart-controls">
+        <div>
+          <label htmlFor="chart-type">Chart</label>
+          <select id="chart-type" value={chart} onChange={(e) => setChart(e.target.value)}>
+            {compared && <option value="comparison">Plans compared</option>}
+            <option value="electricity">Demand and supply</option>
+            <option value="cost">Grid cost</option>
+            <option value="price">Electricity price</option>
+            <option value="waste">Unused production</option>
           </select>
         </div>
-
-        <div className="control-group">
-          <label>Time Resolution:</label>
-          <select value={dataResolution} onChange={(e) => setDataResolution(e.target.value)}>
-            <option value="all">All Timesteps</option>
-            <option value="hourly">Hourly Average</option>
-            <option value="daily">Daily Total</option>
+        <div>
+          <label htmlFor="resolution">Resolution</label>
+          <select id="resolution" value={resolution} onChange={(e) => setResolution(e.target.value)}>
+            {Object.entries(RESOLUTIONS).map(([value, { label }]) => <option key={value} value={value}>{label}</option>)}
           </select>
-        </div>
-
-        <div className="data-info">
-          Showing {chartData.length} data points
         </div>
       </div>
-
       <div className="chart-container">
-        <h3>
-          {chartType === 'electricity' && 'Electricity Demand and Supply'}
-          {chartType === 'generation' && 'Electricity Generation by Source'}
-          {chartType === 'cost' && 'Grid Electricity Costs Over Time'}
-          {chartType === 'waste' && 'Wasted Energy Over Time'}
-        </h3>
-        {chartType === 'electricity' && renderElectricityChart()}
-        {chartType === 'generation' && renderGenerationChart()}
-        {chartType === 'cost' && renderCostChart()}
-        {chartType === 'waste' && renderWasteChart()}
+        <h3>{current.title}</h3>
+        {current.note && <p className="note">{current.note}</p>}
+        <ResponsiveContainer width="100%" height={420}>{current.render()}</ResponsiveContainer>
       </div>
     </div>
   );

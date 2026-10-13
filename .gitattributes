@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Scripts run inside Linux containers or by bash need LF; Windows scripts need CRLF
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf

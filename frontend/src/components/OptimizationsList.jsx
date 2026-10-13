@@ -1,152 +1,59 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import '../styles/OptimizationsList.css';
+import { adminUrl, errorMessage, optimizationApi } from '../services/api';
+import { ErrorBox, euro, formatDate, Loading, PageHeader, RunButton, StatusBadge } from './common';
 
 function OptimizationsList() {
-  const [optimizations, setOptimizations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const navigate = useNavigate();
+  const [optimizations, setOptimizations] = useState(null);
+  const [error, setError] = useState(null);
 
-  useEffect(() => {
-    fetchOptimizations();
-  }, []);
-
-  const fetchOptimizations = async () => {
+  const load = async () => {
     try {
-      setLoading(true);
-      const response = await axios.get('/api/optimizer/optimizations/');
-      // Handle both paginated and non-paginated responses
-      const data = response.data.results || response.data;
-      setOptimizations(Array.isArray(data) ? data : []);
       setError(null);
+      setOptimizations(await optimizationApi.list());
     } catch (err) {
-      setError('Failed to load optimizations: ' + err.message);
-      console.error('Error fetching optimizations:', err);
-    } finally {
-      setLoading(false);
+      setError('Could not load the optimisations: ' + errorMessage(err));
     }
   };
 
-  const handleOptimizationClick = (optimizationId) => {
-    navigate(`/optimization-results/${optimizationId}`);
-  };
+  useEffect(() => { load(); }, []);
 
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
-  const formatDateTime = (dateString) => {
-    if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  if (loading) {
-    return <div className="optimizations-loading">Loading optimizations...</div>;
-  }
-
-  if (error) {
-    return <div className="optimizations-error">{error}</div>;
-  }
+  if (error) return <ErrorBox message={error} onRetry={load} />;
+  if (!optimizations) return <Loading what="optimisations" />;
 
   return (
-    <div className="optimizations-list">
-      <div className="list-header">
-        <h2>Production Plan Optimizations</h2>
-        <p className="subtitle">View optimization results and cost savings</p>
-      </div>
+    <div>
+      <PageHeader
+        title="Shift optimisations"
+        subtitle="Each optimisation moves the flexible shifts of a plan to the cheapest times of a reference week and saves the result as a new plan."
+      >
+        <a className="btn btn-primary" href={adminUrl('OptimizerApp/optimization/add/')}>+ New optimisation</a>
+      </PageHeader>
 
       {optimizations.length === 0 ? (
-        <div className="no-optimizations">
-          <p>No optimizations found.</p>
+        <div className="empty-state">
+          <h3>No optimisations yet</h3>
+          <p>Create one with “New optimisation”: choose a plan, a reference week and the data to use.</p>
         </div>
       ) : (
-        <div className="optimizations-grid">
-          {optimizations.map((optimization) => (
-            <div
-              key={optimization.id}
-              className="optimization-card"
-              onClick={() => handleOptimizationClick(optimization.id)}
-            >
-              <div className="card-header">
-                <h3>{optimization.name}</h3>
-                {optimization.is_completed ? (
-                  <span className="status-badge completed">Completed</span>
-                ) : (
-                  <span className="status-badge pending">Pending</span>
-                )}
+        <div className="card-list">
+          {optimizations.map((o) => (
+            <div key={o.id} className="item-card" onClick={() => navigate(`/optimizations/${o.id}`)}>
+              <div className="card-title">
+                <h3>{o.name}</h3>
+                <StatusBadge done={o.is_completed} />
               </div>
-
-              <div className="card-content">
-                <div className="info-row">
-                  <span className="label">Optimizer:</span>
-                  <span className="value">{optimization.optimizer_label || optimization.optimizer}</span>
-                </div>
-
-                <div className="info-row">
-                  <span className="label">Reference Plan:</span>
-                  <span className="value">{optimization.reference_production_plan_name}</span>
-                </div>
-
-                {optimization.optimized_production_plan_name && (
-                  <div className="info-row">
-                    <span className="label">Optimized Plan:</span>
-                    <span className="value">{optimization.optimized_production_plan_name}</span>
-                  </div>
-                )}
-
-                <div className="info-row">
-                  <span className="label">Reference Week:</span>
-                  <span className="value">
-                    {formatDate(optimization.reference_week_start)} - {formatDate(optimization.reference_week_end)}
-                  </span>
-                </div>
-
-                {optimization.is_completed && (
-                  <>
-                    <div className="divider"></div>
-                    
-                    <div className="cost-summary">
-                      <div className="cost-row">
-                        <span className="label">Initial Cost:</span>
-                        <span className="value">€{optimization.initial_cost_euros?.toFixed(2) || 'N/A'}</span>
-                      </div>
-                      <div className="cost-row">
-                        <span className="label">Optimized Cost:</span>
-                        <span className="value optimized">€{optimization.optimized_cost_euros?.toFixed(2) || 'N/A'}</span>
-                      </div>
-                      <div className="cost-row savings">
-                        <span className="label">Savings:</span>
-                        <span className="value">
-                          €{optimization.cost_savings_euros?.toFixed(2) || 'N/A'} 
-                          ({optimization.cost_savings_percent?.toFixed(2) || 'N/A'}%)
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="card-footer">
-                <span className="timestamp">
-                  {optimization.is_completed 
-                    ? `Completed: ${formatDateTime(optimization.completed_at)}`
-                    : `Created: ${formatDateTime(optimization.created_at)}`
-                  }
-                </span>
-              </div>
+              <dl>
+                <dt>Plan</dt><dd>{o.reference_production_plan_name}</dd>
+                <dt>Reference week</dt><dd>{formatDate(o.reference_week_start)} – {formatDate(o.reference_week_end)}</dd>
+                {o.is_completed && <>
+                  <dt>Cost before → after</dt><dd>{euro(o.initial_cost_euros)} → {euro(o.optimized_cost_euros)}</dd>
+                  <dt>Saving</dt>
+                  <dd className="saving">{euro(o.cost_savings_euros)} ({o.cost_savings_percent?.toFixed(1)}%)</dd>
+                </>}
+              </dl>
+              {!o.is_completed && <RunButton label="Optimise now" run={() => optimizationApi.run(o.id)} onDone={load} />}
             </div>
           ))}
         </div>
