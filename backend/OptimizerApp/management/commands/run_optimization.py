@@ -9,7 +9,7 @@ Usage:
 
 from django.core.management.base import BaseCommand, CommandError
 from OptimizerApp.models import Optimization
-from OptimizerApp.optimizer_packager import run_optimization
+from OptimizerApp.background import run_now
 from OptimizerApp.optimizers import OPTIMIZERS
 
 
@@ -58,7 +58,7 @@ class Command(BaseCommand):
 
             # Run the optimization
             self.stdout.write('Starting optimization calculation...')
-            result = run_optimization(optimization_id)
+            result = run_now(optimization_id, echo=self.stdout.write)
 
             # Display results
             self.stdout.write(self.style.SUCCESS('\nOptimization completed successfully!'))

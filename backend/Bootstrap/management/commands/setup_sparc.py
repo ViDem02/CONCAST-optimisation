@@ -36,6 +36,9 @@ class Command(BaseCommand):
     help = 'Create the admin account and load the example data on the first start'
 
     def handle(self, *args, **options):
+        from OptimizerApp.background import interrupt_running
+        if interrupt_running():
+            self.stdout.write('Marked the optimisations interrupted by the restart as failed')
         self.create_admin()
         data_dir = Path(os.environ.get('SPARC_DEMO_DATA', ''))
         has_data = (WeeklyProductionPlan.objects.exists() or GenerationDataset.objects.exists()
@@ -67,7 +70,7 @@ class Command(BaseCommand):
 
     def calculate_examples(self):
         from OptimizerApp.models import Optimization
-        from OptimizerApp.optimizer_packager import run_optimization
+        from OptimizerApp.background import run_now
         from SimulationApp.simulation import run_simulation
 
         plan = WeeklyProductionPlan.objects.filter(name=PLAN_NAME).first()
@@ -81,7 +84,7 @@ class Command(BaseCommand):
                 reference_week_start=EXAMPLE_WEEK, reference_week_end=date(2024, 7, 21),
                 generation_dataset=generation, prices_dataset=prices,
                 notes='Example created on the first start. Copy its settings to optimise other weeks.')
-            optimization = run_optimization(optimization.pk)
+            optimization = run_now(optimization.pk)
             simulation = Simulation.objects.create(
                 name='Example – July 2024 with the optimised plan',
                 notes='Checks the plan optimised on one week over the whole month.',

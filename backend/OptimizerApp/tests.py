@@ -8,9 +8,13 @@ Unit tests, on small OptimizationProblem instances built by hand:
 - MILPConstraintTests: one instance with a known answer per MILP constraint.
 - MILPOptimalityTests: random instances checked against brute-force enumeration.
 - MILPFallbackTests: behaviour when HiGHS returns no solution or a bad one.
+- EnergyConservationTests: moving runs never creates or destroys energy, in particular
+  across Sunday/Monday (the reference week is periodic).
+- LiveProgressTests, BackgroundThreadTests: calculations in the background with live progress.
 
 Integration tests (PackagerIntegrationTests) run the whole pipeline, from a
-plan stored in the database to the optimized plan written back.
+plan stored in the database to the optimized plan written back, including
+runs at the ends of the week and incomplete data.
 """
 
 import copy
@@ -24,20 +28,21 @@ import numpy as np
 import pytz
 from django.conf import settings
 from django.core.management import call_command
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from scipy.optimize import OptimizeResult
 
 from DatasetApp.models import GenerationDataset, GenerationRecord, PricesDataset, PricesRecord
+from DatasetApp.series import MissingDataError
 from PlanningApp.models import Process, Shift, WeeklyProductionPlan
 
 from .models import Optimization
-from .optimizer_packager import run_optimization
+from .optimizer_packager import STEPS, run_optimization
 from .optimizers import DEFAULT_OPTIMIZER, OPTIMIZER_CHOICES, OPTIMIZERS, get_optimizer
-from .optimizers.base import OptimizationProblem
-from .optimizers.milp import MILPOptimizer
+from .optimizers.base import OptimizationProblem, apply_shifts_from_steps, run_steps
+from .optimizers.milp import MILPOptimizer, build_candidates
 
 # Keys of optimization_data written by the packager, forbidden to optimizers
-RESERVED_KEYS = {'optimizer', 'baseline_cost', 'final_cost', 'total_wasted_energy',
+RESERVED_KEYS = {'optimizer', 'baseline_cost', 'final_cost', 'total_wasted_energy', 'demand_kWh',
                  'shift_changes', 'num_timesteps', 'num_runs_optimized'}
 GAP = MILPOptimizer.mip_rel_gap
 
@@ -50,12 +55,13 @@ def make_problem(runs, gen, price):
     """
     Build a problem from runs given as
     (process_id, start step, length in steps, kWh per step, max backward steps, max forward steps).
+    A run may continue past the last step (start + length > N): it wraps to step 0.
     """
     N = len(price)
     demand = np.zeros((len(runs), N))
     run_info = []
     for r, (process, start, length, power, backward, forward) in enumerate(runs):
-        demand[r, start:start + length] = power
+        demand[r, np.arange(start, start + length) % N] = power
         run_info.append({
             'process_id': process, 'process_name': f'p{process}', 'run_name': f'p{process}_run{r + 1}',
             'run_number': r + 1, 'electricity_consumption_kWh': power * 12,
@@ -79,8 +85,8 @@ def cheap_slot(N, steps, base=10.0, cheap=1.0):
 
 
 def occupied(info, shift, N):
-    """Steps in which a run is on after being shifted (cut at the edges of the horizon)."""
-    return set(range(max(0, info['original_start'] + shift), min(N, info['original_end'] + shift + 1)))
+    """Steps in which a run is on after being shifted, around the periodic week."""
+    return {int(t) for t in (run_steps(info, N) + shift) % N}
 
 
 def is_feasible(problem, shift_steps):
@@ -308,7 +314,8 @@ class MILPConstraintTests(MILPTestCase):
         problem = make_problem([(1, 10, 4, 1, 6, 6)], np.zeros(30), cheap_slot(30, range(10, 14), base=1, cheap=100))
         self.assertAlmostEqual(self.solve_cost(problem), 4)
 
-    def test_runs_at_the_edges_of_the_horizon_follow_problem_cost(self):
+    def test_runs_at_the_edges_of_the_horizon_wrap_around_the_week(self):
+        # Run 1 starts at step 0 and may advance; run 2 ends 1 step before the end and may be delayed
         rng = np.random.default_rng(0)
         problem = make_problem([(1, 0, 3, 1, 2, 2), (2, 17, 3, 1, 2, 2)], rng.uniform(0, 1, 20), rng.uniform(0.1, 0.4, 20))
         self.assertAlmostEqual(self.solve_cost(problem), brute_force_optimum(problem))
@@ -390,6 +397,145 @@ class MILPFallbackTests(SimpleTestCase):
         result = MILPOptimizer().optimize(problem)
         np.testing.assert_array_equal(result.shift_steps, [0])
         self.assertIn('unbounded', result.data['solver_status'])
+
+
+
+def edge_problem(seed):
+    """
+    Random instance with runs at both ends of the week, one of them crossing it: the cases
+    where a truncating shift would lose energy. Runs of a process never overlap in the baseline.
+    """
+    rng = np.random.default_rng(seed)
+    N = int(rng.integers(20, 33))
+    runs = [
+        (1, 0, int(rng.integers(1, 4)), float(rng.uniform(0.5, 3)), int(rng.integers(1, 6)), int(rng.integers(0, 3))),
+        (1, N - 8, int(rng.integers(1, 4)), float(rng.uniform(0.5, 3)), int(rng.integers(0, 3)), int(rng.integers(1, 6))),
+        (2, N - 2, int(rng.integers(3, 6)), float(rng.uniform(0.5, 3)), int(rng.integers(0, 4)), int(rng.integers(0, 4))),
+    ]
+    gen = rng.uniform(0, 3, N) * (rng.random(N) < 0.5)
+    price = rng.uniform(0.05, 0.4, N)
+    return make_problem(runs, gen, price)
+
+
+class EnergyConservationTests(MILPTestCase):
+    """
+    Moving runs must never create or destroy energy. The reference week is periodic:
+    what is moved past Sunday 24:00 continues on Monday 00:00, and vice versa.
+    """
+
+    SEEDS = range(20)
+
+    def run_energy(self, problem):
+        return problem.elec_demand_matrix.sum(axis=1)
+
+    # The shift operator
+
+    def test_shift_operator_keeps_the_energy_of_every_run(self):
+        rng = np.random.default_rng(0)
+        matrix = rng.uniform(0, 5, (6, 40)) * (rng.random((6, 40)) < 0.4)
+        for shifts in ([0] * 6, [1, -1, 39, -39, 40, -41], list(rng.integers(-120, 121, 6))):
+            with self.subTest(shifts=shifts):
+                shifted = apply_shifts_from_steps(matrix, shifts)
+                np.testing.assert_allclose(shifted.sum(axis=1), matrix.sum(axis=1))
+                # Same values, only moved: a shift is a permutation of the steps
+                np.testing.assert_allclose(np.sort(shifted, axis=1), np.sort(matrix, axis=1))
+
+    def test_shift_operator_is_periodic(self):
+        row = np.arange(10.0)[None, :]
+        np.testing.assert_array_equal(apply_shifts_from_steps(row, [10]), row)
+        np.testing.assert_array_equal(apply_shifts_from_steps(row, [3]), np.roll(row, 3))
+        np.testing.assert_array_equal(apply_shifts_from_steps(apply_shifts_from_steps(row, [4]), [-7]),
+                                      apply_shifts_from_steps(row, [-3]))
+        # Step 9 delayed by 2 steps lands on step 1
+        self.assertEqual(apply_shifts_from_steps(row, [2])[0, 1], 9)
+
+    def test_every_candidate_of_the_milp_carries_the_whole_run(self):
+        for seed in self.SEEDS:
+            with self.subTest(seed=seed):
+                problem = edge_problem(seed)
+                candidates = build_candidates(problem)
+                energy = self.run_energy(problem)[candidates.run_of]
+                lengths = np.array([len(run_steps(i, problem.num_timesteps)) for i in problem.run_info])
+                np.testing.assert_allclose(np.asarray(candidates.demand.sum(axis=0)).ravel(), energy)
+                np.testing.assert_array_equal(np.asarray(candidates.active.sum(axis=0)).ravel(),
+                                              lengths[candidates.run_of])
+
+    def test_every_schedule_uses_the_energy_of_the_original_plan(self):
+        rng = np.random.default_rng(1)
+        for seed in self.SEEDS:
+            problem = edge_problem(seed)
+            total = problem.elec_demand_matrix.sum()
+            for _ in range(10):
+                shifts = [int(rng.integers(-i['max_backward_steps'], i['max_forward_steps'] + 1))
+                          for i in problem.run_info]
+                with self.subTest(seed=seed, shifts=shifts):
+                    self.assertAlmostEqual(problem.demand(np.array(shifts)).sum(), total)
+
+    # The optimisers
+
+    def test_milp_keeps_the_energy_and_is_optimal_at_the_ends_of_the_week(self):
+        for seed in self.SEEDS:
+            with self.subTest(seed=seed):
+                problem = edge_problem(seed)
+                shifts = self.solve(problem).shift_steps
+                demand = problem.demand(shifts)
+                self.assertAlmostEqual(demand.sum(), problem.elec_demand_matrix.sum())
+                # Energy balance at every step: bought + used generation = demand
+                bought = np.maximum(0, demand - problem.gen_kWh)
+                np.testing.assert_allclose(bought + np.minimum(demand, problem.gen_kWh), demand)
+                best = brute_force_optimum(problem)
+                self.assertLessEqual(problem.cost(shifts), best * (1 + GAP) + 1e-9)
+
+    def test_every_optimizer_keeps_the_energy(self):
+        for name, optimizer_class in OPTIMIZERS.items():
+            for seed in self.SEEDS:
+                with self.subTest(optimizer=name, seed=seed):
+                    problem = edge_problem(seed)
+                    shifts = optimizer_class().optimize(problem).shift_steps
+                    self.assertAlmostEqual(problem.demand(shifts).sum(), problem.elec_demand_matrix.sum())
+
+    # A week of 5-minute steps: Monday 00:00 is step 0, Sunday 23:00 is step 2004
+
+    WEEK_STEPS = 2016
+
+    def test_monday_morning_run_moved_earlier_does_not_vanish(self):
+        # Monday 00:00-01:00, may start 1 hour earlier; flat price, no generation: nothing to gain
+        problem = make_problem([(1, 0, 12, 10.0, 12, 0)], np.zeros(self.WEEK_STEPS), np.full(self.WEEK_STEPS, 0.2))
+        baseline = problem.cost(zeros(problem))
+        for k in range(-12, 1):
+            with self.subTest(shift=k):
+                self.assertAlmostEqual(problem.cost(np.array([k])), baseline)
+        self.assertAlmostEqual(self.solve_cost(problem), baseline)  # No fake saving
+
+    def test_monday_morning_run_can_move_to_sunday_evening(self):
+        # Electricity is cheaper on Sunday 23:00-24:00: the run moves there with all its energy
+        price = np.full(self.WEEK_STEPS, 0.2)
+        price[2004:] = 0.05
+        problem = make_problem([(1, 0, 12, 10.0, 12, 0)], np.zeros(self.WEEK_STEPS), price)
+        shifts = self.solve(problem).shift_steps
+        self.assertEqual(shifts[0], -12)
+        demand = problem.demand(shifts)
+        self.assertEqual(set(np.flatnonzero(demand)), set(range(2004, 2016)))
+        self.assertAlmostEqual(problem.cost(shifts), 12 * 10.0 * 0.05)
+
+    def test_sunday_night_run_moved_later_lands_on_monday_morning(self):
+        price = np.full(self.WEEK_STEPS, 0.2)
+        price[:12] = 0.05
+        problem = make_problem([(1, 2004, 12, 10.0, 0, 12)], np.zeros(self.WEEK_STEPS), price)
+        shifts = self.solve(problem).shift_steps
+        self.assertEqual(shifts[0], 12)
+        self.assertEqual(set(np.flatnonzero(problem.demand(shifts))), set(range(12)))
+        self.assertAlmostEqual(problem.cost(shifts), 12 * 10.0 * 0.05)
+
+    def test_run_crossing_midnight_cannot_overlap_its_own_process_through_the_boundary(self):
+        # Run 1 crosses Sunday/Monday (steps 2010..2015, 0..5); run 2 of the same process starts at
+        # step 8 and may advance by 6 into a cheap slot at steps 2..7, which run 1 partly occupies
+        price = np.full(self.WEEK_STEPS, 0.2)
+        price[2:8] = 0.01
+        problem = make_problem([(1, 2010, 12, 1.0, 0, 0), (1, 8, 6, 1.0, 6, 0)], np.zeros(self.WEEK_STEPS), price)
+        shifts = self.solve(problem).shift_steps
+        self.assertTrue(is_feasible(problem, shifts))
+        self.assertEqual(shifts[1], -2)  # Up to step 6: run 1 ends at step 5
 
 
 # ----------------------------------------------------------------------------
@@ -573,3 +719,325 @@ class PackagerIntegrationTests(TestCase):
                 out = StringIO()
                 call_command('run_optimization', self.create_optimization(optimizer).id, stdout=out)
                 self.assertIn(expected, out.getvalue())
+
+
+def week_hours(monday):
+    """Hourly timestamps of a week, plus Monday 00:00 of the next week."""
+    tz = pytz.timezone(settings.TIME_ZONE)
+    start = tz.localize(datetime.combine(monday, datetime.min.time()))
+    return [start + timedelta(hours=h) for h in range(7 * 24 + 1)]
+
+
+class WeekBoundaryIntegrationTests(TestCase):
+    """
+    The whole pipeline with runs at the ends of the week: no energy lost, no crash
+    when writing the plan back, and the cost simulation of the written plan agrees.
+    One 120 kW process, no generation, price 0.2 EUR/kWh except where noted.
+    """
+
+    WEEK = date(2024, 7, 8)
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.generation = GenerationDataset.objects.create(name='no generation')
+        GenerationRecord.objects.bulk_create(
+            GenerationRecord(generation_dataset=cls.generation, timestamp=ts, ele_generated_by_cogen_kWh=0,
+                             ele_generated_by_solar_kWh=0) for ts in week_hours(cls.WEEK))
+
+    def prices(self, cheap_hours=()):
+        """Prices dataset at 0.2 EUR/kWh, 0.05 in the given (weekday, hour) slots."""
+        dataset = PricesDataset.objects.create(name=f'prices {PricesDataset.objects.count()}')
+        PricesRecord.objects.bulk_create(
+            PricesRecord(prices_dataset=dataset, timestamp=ts,
+                         electricity_price=0.05 if (ts.weekday(), ts.hour) in cheap_hours else 0.2)
+            for ts in week_hours(self.WEEK))
+        return dataset
+
+    def optimize(self, shift, prices):
+        """Optimise a one-process plan with the given shift; returns (optimization, problem)."""
+        plan = WeeklyProductionPlan.objects.create(name=f'plan {WeeklyProductionPlan.objects.count()}')
+        process = Process.objects.create(name='mixer', electricity_consumption_kWh=120, production_plan=plan)
+        Shift.objects.create(name='batch', process=process, **shift)
+        optimization = Optimization.objects.create(
+            name=plan.name, reference_production_plan=plan, reference_week_start=self.WEEK,
+            reference_week_end=self.WEEK + timedelta(days=6), generation_dataset=self.generation, prices_dataset=prices)
+        problems = []
+
+        def capture(*args, **kwargs):
+            problems.append(OptimizationProblem(*args, **kwargs))
+            return problems[-1]
+
+        with mock.patch('OptimizerApp.optimizer_packager.OptimizationProblem', side_effect=capture):
+            optimization = run_optimization(optimization.id)
+        return optimization, problems[0]
+
+    def simulate(self, optimization):
+        """Cost simulation of the original and the optimised plan on the reference week."""
+        from PlanningApp.models import Simulation
+        from SimulationApp.simulation import run_simulation
+        simulation = Simulation.objects.create(
+            name=f'check {optimization.name}', original_production_plan=optimization.reference_production_plan,
+            optimized_production_plan=optimization.optimized_production_plan, generation_dataset=self.generation,
+            prices_dataset=optimization.prices_dataset, start_date=self.WEEK, end_date=self.WEEK + timedelta(days=6))
+        results = run_simulation(simulation.pk)
+        timestep = results.timestep_data
+        return results, sum(timestep['original_demand_kWh']), sum(timestep['total_demand_kWh'])
+
+    def written_shift(self, optimization):
+        shift = Shift.objects.get(process__production_plan=optimization.optimized_production_plan)
+        return (shift.start_day, shift.start_hour, shift.start_minutes, shift.end_day, shift.end_hour, shift.end_minutes)
+
+    def assertEnergyKept(self, optimization, results, original_kWh, optimized_kWh, expected_kWh):
+        data = optimization.optimization_data
+        self.assertAlmostEqual(data['demand_kWh']['original'], expected_kWh)
+        self.assertAlmostEqual(data['demand_kWh']['optimized'], expected_kWh)
+        self.assertAlmostEqual(original_kWh, expected_kWh)
+        self.assertAlmostEqual(optimized_kWh, expected_kWh)
+        # The simulation of the written plan reproduces the optimiser's costs
+        self.assertAlmostEqual(results.original_cost_euros, data['baseline_cost'])
+        self.assertAlmostEqual(results.optimized_cost_euros, data['final_cost'])
+
+    def test_monday_morning_run_allowed_to_start_earlier_does_not_vanish(self):
+        # Monday 00:00-01:00 may start 1 hour earlier; flat price: no saving is possible
+        optimization, _ = self.optimize(dict(start_day=0, start_hour=0, end_day=0, end_hour=1,
+                                             max_forward_minutes=0, max_backwards_minutes=60), self.prices())
+        self.assertAlmostEqual(optimization.optimization_data['final_cost'], 120 * 0.2)
+        self.assertEqual(optimization.cost_savings_euros, 0)
+        self.assertEnergyKept(optimization, *self.simulate(optimization), expected_kWh=120)
+
+    def test_monday_morning_run_moves_to_sunday_evening(self):
+        optimization, _ = self.optimize(dict(start_day=0, start_hour=0, end_day=0, end_hour=1,
+                                             max_forward_minutes=0, max_backwards_minutes=60),
+                                        self.prices(cheap_hours={(6, 23)}))
+        self.assertEqual(self.written_shift(optimization), (6, 23, 0, 0, 0, 0))  # Sunday 23:00 - Monday 00:00
+        self.assertAlmostEqual(optimization.optimization_data['final_cost'], 120 * 0.05)
+        self.assertEnergyKept(optimization, *self.simulate(optimization), expected_kWh=120)
+
+    def test_sunday_night_run_moved_later_is_written_on_monday_morning(self):
+        # This case used to crash when the plan was written back (index past the end of the week)
+        optimization, _ = self.optimize(dict(start_day=6, start_hour=23, end_day=0, end_hour=0,
+                                             max_forward_minutes=60, max_backwards_minutes=0),
+                                        self.prices(cheap_hours={(0, 0)}))
+        self.assertEqual(self.written_shift(optimization), (0, 0, 0, 0, 1, 0))  # Monday 00:00 - 01:00
+        self.assertAlmostEqual(optimization.optimization_data['final_cost'], 120 * 0.05)
+        self.assertEnergyKept(optimization, *self.simulate(optimization), expected_kWh=120)
+
+    def test_run_crossing_midnight_is_one_run_and_moves_whole(self):
+        # Sunday 23:00 - Monday 01:00 is one batch of 2 hours, not two pieces moving apart
+        optimization, problem = self.optimize(dict(start_day=6, start_hour=23, end_day=0, end_hour=1,
+                                                   max_forward_minutes=0, max_backwards_minutes=120),
+                                              self.prices(cheap_hours={(6, 21), (6, 22)}))
+        N = problem.num_timesteps
+        self.assertEqual(len(problem.run_info), 1)
+        self.assertEqual((problem.run_info[0]['original_start'], problem.run_info[0]['original_end']),
+                         (N - 12, N + 11))
+        self.assertEqual(self.written_shift(optimization), (6, 21, 0, 6, 23, 0))  # Sunday 21:00 - 23:00
+        self.assertAlmostEqual(optimization.optimization_data['final_cost'], 240 * 0.05)
+        self.assertEnergyKept(optimization, *self.simulate(optimization), expected_kWh=240)
+
+    def test_write_back_refuses_a_schedule_that_changes_the_energy(self):
+        # Safety net: if an optimiser ever lost energy, nothing would be saved
+        prices = self.prices()
+        with mock.patch('OptimizerApp.optimizer_packager.apply_shifts_from_steps',
+                        side_effect=lambda matrix, shifts: matrix * 0.5):
+            with self.assertRaisesMessage(RuntimeError, 'it was not saved'):
+                self.optimize(dict(start_day=2, start_hour=8, end_day=2, end_hour=9,
+                                   max_forward_minutes=0, max_backwards_minutes=0), prices)
+        self.assertFalse(Optimization.objects.filter(completed_at__isnull=False).exists())
+
+
+class IncompleteDataTests(TestCase):
+    """Missing or invalid hours of generation or prices stop the optimisation before the solver runs."""
+
+    WEEK = date(2024, 7, 8)
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.plan = WeeklyProductionPlan.objects.create(name='plan')
+        press = Process.objects.create(name='press', electricity_consumption_kWh=120, production_plan=cls.plan)
+        Shift.objects.create(name='s', process=press, start_day=2, start_hour=8, end_day=2, end_hour=10,
+                             max_forward_minutes=60, max_backwards_minutes=60)
+        cls.generation = GenerationDataset.objects.create(name='generation')
+        cls.prices = PricesDataset.objects.create(name='prices')
+        hours = week_hours(cls.WEEK)
+        GenerationRecord.objects.bulk_create(
+            GenerationRecord(generation_dataset=cls.generation, timestamp=ts, ele_generated_by_cogen_kWh=50,
+                             ele_generated_by_solar_kWh=0) for ts in hours)
+        PricesRecord.objects.bulk_create(
+            PricesRecord(prices_dataset=cls.prices, timestamp=ts, electricity_price=0.2) for ts in hours)
+        cls.hours = hours
+
+    def assertRefused(self, message):
+        optimization = Optimization.objects.create(
+            name='o', reference_production_plan=self.plan, reference_week_start=self.WEEK,
+            reference_week_end=self.WEEK + timedelta(days=6), generation_dataset=self.generation,
+            prices_dataset=self.prices)
+        with mock.patch.object(MILPOptimizer, 'optimize') as solver:
+            with self.assertRaisesMessage(MissingDataError, message):
+                run_optimization(optimization.id)
+            solver.assert_not_called()
+        optimization.refresh_from_db()
+        self.assertFalse(optimization.is_completed())
+        self.assertFalse(WeeklyProductionPlan.objects.filter(is_optimized=True).exists())
+
+    def test_complete_data_are_accepted(self):
+        optimization = Optimization.objects.create(
+            name='ok', reference_production_plan=self.plan, reference_week_start=self.WEEK,
+            reference_week_end=self.WEEK + timedelta(days=6), generation_dataset=self.generation,
+            prices_dataset=self.prices)
+        self.assertTrue(run_optimization(optimization.id).is_completed())
+
+    def test_a_missing_day_of_generation_is_refused(self):
+        wednesday = [ts for ts in self.hours if ts.weekday() == 2 and ts.date() == self.WEEK + timedelta(days=2)]
+        GenerationRecord.objects.filter(generation_dataset=self.generation, timestamp__in=wednesday).delete()
+        self.assertRefused('generation data "generation" have no value for 24 hour(s)')
+
+    def test_a_missing_price_hour_is_refused(self):
+        PricesRecord.objects.filter(prices_dataset=self.prices, timestamp=self.hours[3 * 24 + 12]).delete()
+        self.assertRefused('no value for 1 hour(s) of the period (08 Jul 2024 00:00 to 14 Jul 2024 23:00): 11 Jul 2024 12:00')
+
+    def test_a_missing_first_or_last_hour_is_refused(self):
+        GenerationRecord.objects.filter(generation_dataset=self.generation, timestamp=self.hours[-2]).delete()
+        self.assertRefused('14 Jul 2024 23:00')
+
+    def test_an_infinite_value_is_refused(self):
+        GenerationRecord.objects.filter(generation_dataset=self.generation, timestamp=self.hours[30]).update(
+            ele_generated_by_cogen_kWh=float('inf'))
+        self.assertRefused('is not a number')
+
+    def test_a_negative_price_is_refused(self):
+        PricesRecord.objects.filter(prices_dataset=self.prices, timestamp=self.hours[40]).update(electricity_price=-0.1)
+        self.assertRefused('is negative')
+
+
+class LiveProgressFixture:
+    """A plan with one flexible press run on Wednesday and a complete week of data."""
+
+    WEEK = date(2024, 7, 8)
+
+    def make_data(self):
+        self.plan = WeeklyProductionPlan.objects.create(name='plan')
+        press = Process.objects.create(name='press', electricity_consumption_kWh=120, production_plan=self.plan)
+        Shift.objects.create(name='s', process=press, start_day=2, start_hour=8, end_day=2, end_hour=10,
+                             max_forward_minutes=60, max_backwards_minutes=60)
+        self.generation = GenerationDataset.objects.create(name='generation')
+        self.prices = PricesDataset.objects.create(name='prices')
+        hours = week_hours(self.WEEK)
+        GenerationRecord.objects.bulk_create(
+            GenerationRecord(generation_dataset=self.generation, timestamp=ts, ele_generated_by_cogen_kWh=0,
+                             ele_generated_by_solar_kWh=200 if 9 <= ts.hour <= 12 else 0) for ts in hours)
+        PricesRecord.objects.bulk_create(
+            PricesRecord(prices_dataset=self.prices, timestamp=ts, electricity_price=0.2) for ts in hours)
+        self.optimization = Optimization.objects.create(
+            name='live', reference_production_plan=self.plan, reference_week_start=self.WEEK,
+            reference_week_end=self.WEEK + timedelta(days=6), generation_dataset=self.generation,
+            prices_dataset=self.prices)
+
+    def recorded_steps(self):
+        """Patch the progress recorder to remember every (step, label) it saves."""
+        from . import background
+        steps = []
+        original = background.ProgressRecorder._save
+
+        def spy(recorder):
+            steps.append((recorder.progress['step'], recorder.progress['label'], recorder.progress['detail']))
+            original(recorder)
+        return steps, mock.patch.object(background.ProgressRecorder, '_save', spy)
+
+
+@override_settings(OPTIMIZATION_BACKGROUND=False)
+class LiveProgressTests(LiveProgressFixture, TestCase):
+
+    def setUp(self):
+        self.make_data()
+        from django.contrib.auth.models import User
+        self.client.force_login(User.objects.create_superuser('admin', '', 'pw'))
+        self.url = f'/api/optimizer/optimizations/{self.optimization.pk}/'
+
+    def test_steps_are_reported_in_order_and_the_run_ends_done(self):
+        from .background import run_now
+        steps, spy = self.recorded_steps()
+        with spy:
+            run_now(self.optimization.pk)
+        self.assertEqual([step for step, _, _ in steps if step], [1, 2, 3, 4])
+        self.assertEqual([label for step, label, _ in steps if step], STEPS)
+        solver_step = next(detail for step, _, detail in steps if step == 3)
+        self.assertIn('1 runs, 25 possible positions', solver_step)  # The solver step names the model size
+        self.optimization.refresh_from_db()
+        self.assertEqual(self.optimization.status, 'done')
+        self.assertEqual(self.optimization.progress['label'], 'Done')
+
+    def test_api_starts_the_run_and_reports_its_progress(self):
+        response = self.client.post(self.url + 'run/')
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()['status'], 'done')  # Calculated in the request in tests
+        state = self.client.get(self.url + 'progress/').json()
+        self.assertEqual(state['status'], 'done')
+        self.assertTrue(state['is_completed'])
+        self.assertEqual(self.client.get(self.url).json()['live']['status'], 'done')
+
+    def test_a_failure_is_reported_with_its_message(self):
+        PricesRecord.objects.filter(prices_dataset=self.prices, timestamp__hour=12).delete()
+        state = self.client.post(self.url + 'run/').json()
+        self.assertEqual(state['status'], 'failed')
+        self.assertIn('have no value for 7 hour(s)', state['error'])
+        self.assertEqual(state['progress']['step'], 1)  # Stopped while checking the data
+
+    def set_running(self, minutes_ago):
+        from django.utils import timezone
+        moment = (timezone.now() - timedelta(minutes=minutes_ago)).isoformat()
+        Optimization.objects.filter(pk=self.optimization.pk).update(status='running', progress={
+            'step': 3, 'steps': 4, 'label': STEPS[2], 'detail': '1 runs', 'started_at': moment,
+            'step_started_at': moment, 'updated_at': moment, 'time_limit': 20})
+
+    def test_a_second_start_is_refused_while_running(self):
+        self.set_running(minutes_ago=0)
+        response = self.client.post(self.url + 'run/')
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('already being calculated', response.json()['error'])
+        self.assertEqual(self.client.get(self.url + 'progress/').json()['status'], 'running')
+
+    def test_a_run_without_news_is_reported_as_failed_and_can_be_restarted(self):
+        self.set_running(minutes_ago=10)
+        state = self.client.get(self.url + 'progress/').json()
+        self.assertEqual(state['status'], 'failed')
+        self.assertIn('stopped without finishing', state['error'])
+        self.assertEqual(self.client.post(self.url + 'run/').status_code, 202)
+
+    def test_runs_interrupted_by_a_restart_are_marked_failed(self):
+        from .background import interrupt_running
+        self.set_running(minutes_ago=0)
+        self.assertEqual(interrupt_running(), 1)
+        self.optimization.refresh_from_db()
+        self.assertEqual((self.optimization.status, 'restarted' in self.optimization.error), ('failed', True))
+
+    def test_admin_shows_the_live_progress_while_running(self):
+        self.set_running(minutes_ago=0)
+        page = self.client.get(f'/admin/OptimizerApp/optimization/{self.optimization.pk}/change/')
+        self.assertContains(page, 'data-sparc-progress="/api/optimizer/optimizations/')
+        self.assertContains(page, STEPS[2])
+        self.assertContains(self.client.get('/admin/OptimizerApp/optimization/'), 'Calculating…')
+
+    def test_command_prints_the_steps(self):
+        out = StringIO()
+        call_command('run_optimization', self.optimization.pk, stdout=out)
+        for number, label in enumerate(STEPS, start=1):
+            self.assertIn(f'[{number}/4] {label}', out.getvalue())
+
+
+class BackgroundThreadTests(LiveProgressFixture, TransactionTestCase):
+    """The real background thread (needs committed data, hence a TransactionTestCase)."""
+
+    def test_the_thread_calculates_and_records_every_step(self):
+        from .background import start
+        self.make_data()
+        steps, spy = self.recorded_steps()
+        with spy, override_settings(OPTIMIZATION_BACKGROUND=True):
+            thread = start(self.optimization.pk)
+            self.assertIsNotNone(thread)
+            thread.join(timeout=60)
+        self.assertFalse(thread.is_alive())
+        self.optimization.refresh_from_db()
+        self.assertEqual(self.optimization.status, 'done', self.optimization.error)
+        self.assertTrue(self.optimization.is_completed())
+        self.assertEqual([step for step, _, _ in steps if step], [1, 2, 3, 4])

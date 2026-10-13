@@ -13,5 +13,15 @@
   .sparc-ok { color: #1b7f3b; font-weight: 600; }
   .sparc-warn { color: #b26b00; font-weight: 600; }
   .sparc-help pre { background: var(--darkened-bg); padding: 8px; overflow-x: auto; }
+  .sparc-error { color: #b42318; font-weight: 600; }
+  .sparc-progress { max-width: 640px; }
+  .sparc-progress-bar { height: 10px; background: var(--darkened-bg); border-radius: 5px; overflow: hidden; margin: 4px 0 8px; }
+  .sparc-progress-bar span { display: block; height: 100%; background: #2563eb; transition: width 0.8s ease; }
+  .sparc-progress ol { margin: 6px 0 6px 20px; padding: 0; }
+  .sparc-progress li { list-style: decimal; color: var(--body-quiet-color); line-height: 1.6; }
+  .sparc-progress li.done { color: #1b7f3b; }
+  .sparc-progress li.done::after { content: " ✓"; }
+  .sparc-progress li.current { color: var(--body-fg); font-weight: 600; }
+  .sparc-progress-note, .sparc-progress-time, .sparc-progress-detail { color: var(--body-quiet-color); }
 </style>
 {% endblock %}

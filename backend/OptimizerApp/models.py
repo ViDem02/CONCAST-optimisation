@@ -113,6 +113,13 @@ class Optimization(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     
+    # Live state of the calculation (see OptimizerApp.background)
+    STATUS_CHOICES = [('new', 'Not calculated'), ('running', 'Calculating'), ('done', 'Calculated'), ('failed', 'Failed')]
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='new', editable=False)
+    progress = models.JSONField(null=True, blank=True, editable=False,
+                                help_text="Current step of the calculation, updated while it runs")
+    error = models.TextField(blank=True, editable=False, help_text="Why the last calculation failed")
+    
     class Meta:
         ordering = ['-created_at']
         verbose_name = 'shift optimisation'

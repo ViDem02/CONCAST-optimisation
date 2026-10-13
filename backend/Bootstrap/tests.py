@@ -11,7 +11,7 @@ from unittest import mock
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from ChillersApp.models import Chiller, ChillerSimulation
 from DatasetApp.models import GenerationDataset, TemperatureDataset
@@ -24,6 +24,7 @@ DATA_DIR = Path(settings.BASE_DIR).parent / 'data'
 ENVIRONMENT = {'SPARC_DEMO_DATA': str(DATA_DIR), 'SPARC_ADMIN_PASSWORD': 'secret'}
 
 
+@override_settings(OPTIMIZATION_BACKGROUND=False)
 @mock.patch.dict(os.environ, ENVIRONMENT)
 class FirstStartTests(TestCase):
 

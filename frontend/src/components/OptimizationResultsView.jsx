@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { adminUrl, errorMessage, optimizationApi } from '../services/api';
 import ShiftsGantt from './ShiftsGantt';
-import { describeMove, ErrorBox, euro, formatDate, formatDateTime, Loading, PageHeader, RunButton } from './common';
+import { describeMove, ErrorBox, euro, formatDate, formatDateTime, Loading, PageHeader } from './common';
+import { OptimizationProgress, useLiveOptimization } from './OptimizationProgress';
 import '../styles/OptimizationResultsView.css';
 
 function solutionQuality(data) {
@@ -31,6 +32,9 @@ function OptimizationResultsView() {
 
   useEffect(() => { load(); }, [id]);
 
+  // Live progress of a calculation started here or elsewhere; reload the results when it ends
+  const run = useLiveOptimization(id, optimization?.live, load);
+
   if (error) return <ErrorBox message={error} onRetry={load} />;
   if (!optimization) return <Loading what="the optimisation" />;
 
@@ -54,14 +58,22 @@ function OptimizationResultsView() {
         title={o.name}
         subtitle={`Plan “${o.reference_production_plan_name}”, reference week ${formatDate(o.reference_week_start)} – ${formatDate(o.reference_week_end)}`}
       >
-        <RunButton label={o.is_completed ? 'Optimise again' : 'Optimise now'} className="btn btn-secondary"
-                   run={() => optimizationApi.run(o.id)} onDone={load} />
+        <button className="btn btn-secondary" disabled={run.running} onClick={run.start}>
+          {run.running ? 'Calculating…' : o.is_completed ? 'Optimise again' : 'Optimise now'}
+        </button>
         <a className="btn btn-secondary" href={adminUrl(`OptimizerApp/optimization/${o.id}/change/`)}>Edit settings</a>
         {o.is_completed && <a className="btn btn-primary" href={checkUrl}>Check over a longer period</a>}
       </PageHeader>
 
+      {(run.running || run.live?.status === 'failed' || run.error) && (
+        <div className="panel">
+          <OptimizationProgress live={run.live} />
+          {run.error && <p className="run-error">{run.error}</p>}
+        </div>
+      )}
+
       {!o.is_completed ? (
-        <div className="panel"><p>This optimisation has not been calculated yet. Press “Optimise now”.</p></div>
+        !run.running && <div className="panel"><p>This optimisation has not been calculated yet. Press “Optimise now”.</p></div>
       ) : (
         <>
           <div className="kpi-grid">

@@ -12,7 +12,9 @@ y_t >= 0 is the energy bought from the grid at step t:
 
 The last constraint keeps the runs of the same process from overlapping.
 The shifted demand T_k d_r and activity T_k a_r are precomputed with the
-shift operator used by problem.cost, so the MILP objective is exactly J(s).
+periodic shift operator used by problem.cost (see optimizers.base), so the
+MILP objective is exactly J(s) and every candidate column carries the whole
+energy of its run: moving a run across Sunday/Monday never makes it vanish.
 The linearization of y = max(0, D - g) assumes non-negative prices.
 """
 
@@ -20,16 +22,52 @@ import numpy as np
 from scipy import sparse
 from scipy.optimize import Bounds, LinearConstraint, milp
 
-from .base import BaseOptimizer, OptimizerResult, apply_shifts_from_steps
+from dataclasses import dataclass
+
+from .base import BaseOptimizer, OptimizerResult, apply_shifts_from_steps, run_steps
+
+
+@dataclass
+class Candidates:
+    """
+    Every allowed position of every run: candidate j is run run_of[j] moved by shift_of[j] steps.
+
+    demand: N x n sparse matrix, column j = shifted demand of the run (kWh per step)
+    active: N x n sparse matrix, column j = shifted activity (0/1) of the run
+    process_of: n process indices (0..P-1) of the candidates
+    """
+    run_of: np.ndarray
+    shift_of: np.ndarray
+    process_of: np.ndarray
+    demand: sparse.csr_matrix
+    active: sparse.coo_matrix
+
+
+def build_candidates(problem):
+    info, N = problem.run_info, problem.num_timesteps
+    run_of = np.concatenate([np.full(i['max_backward_steps'] + i['max_forward_steps'] + 1, r)
+                             for r, i in enumerate(info)])
+    shift_of = np.concatenate([np.arange(-i['max_backward_steps'], i['max_forward_steps'] + 1)
+                               for i in info])
+    _, process_of = np.unique([info[r]['process_id'] for r in run_of], return_inverse=True)
+
+    activity = np.zeros_like(problem.elec_demand_matrix)
+    for r, i in enumerate(info):
+        activity[r, run_steps(i, N)] = 1
+    return Candidates(
+        run_of=run_of, shift_of=shift_of, process_of=process_of,
+        demand=sparse.csr_matrix(apply_shifts_from_steps(problem.elec_demand_matrix[run_of], shift_of).T),
+        active=sparse.coo_matrix(apply_shifts_from_steps(activity[run_of], shift_of).T),
+    )
 
 
 class MILPOptimizer(BaseOptimizer):
     name = 'milp'
     label = 'MILP (HiGHS)'
 
-    # The admin action runs inside the web request, so the time limit stays
-    # below Gunicorn's 30 s worker timeout. When it is reached, the best
-    # solution found so far is returned.
+    # Calculations run in the background with live progress (OptimizerApp.background),
+    # so the limit only bounds how long users wait: a normal week is solved in 1-2 s.
+    # When it is reached, the best solution found so far is returned with its gap.
     time_limit = 20  # seconds
     mip_rel_gap = 1e-4
 
@@ -37,20 +75,12 @@ class MILPOptimizer(BaseOptimizer):
         R, N = problem.num_runs, problem.num_timesteps
         info = problem.run_info
 
-        # Candidate j = (run_of[j], shift_of[j]) for every run and allowed shift
-        run_of = np.concatenate([np.full(i['max_backward_steps'] + i['max_forward_steps'] + 1, r)
-                                 for r, i in enumerate(info)])
-        shift_of = np.concatenate([np.arange(-i['max_backward_steps'], i['max_forward_steps'] + 1)
-                                   for i in info])
-        _, process_of = np.unique([info[r]['process_id'] for r in run_of], return_inverse=True)
+        # Candidate j = (run_of[j], shift_of[j]) for every run and allowed shift, with its
+        # precomputed shifted demand d_{r,k} and activity a_{r,k}
+        candidates = build_candidates(problem)
+        run_of, shift_of, process_of = candidates.run_of, candidates.shift_of, candidates.process_of
+        demand, active = candidates.demand, candidates.active
         n, P = len(run_of), process_of.max() + 1
-
-        # Precomputed shifted demand d_{r,k} and activity a_{r,k}, one column per candidate
-        activity = np.zeros_like(problem.elec_demand_matrix)
-        for r, i in enumerate(info):
-            activity[r, i['original_start']:i['original_end'] + 1] = 1
-        demand = sparse.csr_matrix(apply_shifts_from_steps(problem.elec_demand_matrix[run_of], shift_of).T)
-        active = sparse.coo_matrix(apply_shifts_from_steps(activity[run_of], shift_of).T)
 
         # Variables z = [x (n binaries), y (N continuous)]
         one_shift_per_run = sparse.coo_matrix((np.ones(n), (run_of, np.arange(n))), shape=(R, n))

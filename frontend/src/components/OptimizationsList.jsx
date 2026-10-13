@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { adminUrl, errorMessage, optimizationApi } from '../services/api';
-import { ErrorBox, euro, formatDate, Loading, PageHeader, RunButton, StatusBadge } from './common';
+import { ErrorBox, euro, formatDate, Loading, PageHeader, StatusBadge } from './common';
+import { OptimizeButton } from './OptimizationProgress';
 
 function OptimizationsList() {
   const navigate = useNavigate();
@@ -42,7 +43,9 @@ function OptimizationsList() {
             <div key={o.id} className="item-card" onClick={() => navigate(`/optimizations/${o.id}`)}>
               <div className="card-title">
                 <h3>{o.name}</h3>
-                <StatusBadge done={o.is_completed} />
+                {o.live?.status === 'running'
+                  ? <span className="status-badge running">Calculating</span>
+                  : <StatusBadge done={o.is_completed} />}
               </div>
               <dl>
                 <dt>Plan</dt><dd>{o.reference_production_plan_name}</dd>
@@ -53,7 +56,9 @@ function OptimizationsList() {
                   <dd className="saving">{euro(o.cost_savings_euros)} ({o.cost_savings_percent?.toFixed(1)}%)</dd>
                 </>}
               </dl>
-              {!o.is_completed && <RunButton label="Optimise now" run={() => optimizationApi.run(o.id)} onDone={load} />}
+              {(!o.is_completed || o.live?.status !== 'done') && (
+                <OptimizeButton id={o.id} live={o.live} onDone={load} compact />
+              )}
             </div>
           ))}
         </div>

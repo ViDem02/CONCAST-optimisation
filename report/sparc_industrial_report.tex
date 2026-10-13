@@ -285,14 +285,14 @@
   \toprule
   \textbf{Process} & \textbf{Power} & \textbf{Hours/week} & \textbf{Runs/week} & \textbf{Energy/week} & \textbf{Allowed movement} \\
   \midrule
-  \texttt{s\_finit} & 100\,kW & 119.0 & 4 & 11.9\,MWh & fixed \\
+  \texttt{s\_finit} & 100\,kW & 119.0 & 3 & 11.9\,MWh & fixed \\
   \texttt{s\_torre} & 130\,kW & 129.5 & 2 & 16.8\,MWh & fixed \\
   \texttt{s\_hiro}  & 134\,kW & 65.3  & 3 & 8.7\,MWh  & fixed \\
   \texttt{b\_past}  & 278\,kW & 23.3  & 5 & 6.5\,MWh  & up to 2\,h earlier or later \\
   \texttt{b\_burr}  & 5\,kW   & 25.0  & 9 & 0.1\,MWh  & up to 2\,h earlier or later \\
   \texttt{b\_conf}  & 19\,kW  & 24.8  & 8 & 0.5\,MWh  & up to 2\,h earlier or later \\
   \midrule
-  \textbf{Total} & & & 31 & 44.5\,MWh & 7.1\,MWh flexible (16\%) \\
+  \textbf{Total} & & & 30 & 44.5\,MWh & 7.1\,MWh flexible (16\%) \\
   \bottomrule
   \end{tabularx}
   \caption{Processes of the reference week (timetable of 22--28 September 2025, file
@@ -385,7 +385,8 @@
 
   Technically this is a \emph{mixed-integer linear programme} (Appendix~\ref{app:model}) solved
   with the open-source solver HiGHS. For one week it has about 1\,100 yes/no decisions and is solved
-  to proven optimality in 1--2 seconds; a 20-second limit protects the web page in rare hard cases.
+  to proven optimality in 1--2 seconds; a 20-second limit bounds the wait in rare hard cases, and
+  the page shows the progress of the calculation while it runs.
 
   \begin{notebox}{What the optimisation does not know (yet)}
     \begin{itemize}
@@ -514,7 +515,7 @@
   hour-by-hour pattern of the specific week --- whether the cogenerator runs, whether the morning is
   sunny, when prices peak. A plan tuned on another week moves batches into hours that may be worse
   in the week where it is applied. The example in the tool shows the same effect: the plan
-  optimised on the week of 15~July~2024 saves 5.2\% on that week but only 0.9\% over the whole of
+  optimised on the week of 15~July~2024 saves 5.2\% on that week but less than 1\% over the whole of
   July.
 
   \begin{keybox}{Practical consequence}

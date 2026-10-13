@@ -31,6 +31,10 @@ TIME_ZONE = 'Europe/Rome'
 # Empty when the website and the admin share the same address (Docker setup).
 FRONTEND_URL = env('FRONTEND_URL', default='')
 
+# Optimisations run in a background thread and report live progress (OptimizerApp.background);
+# False calculates them inside the web request (used by the tests)
+OPTIMIZATION_BACKGROUND = env.bool('OPTIMIZATION_BACKGROUND', default=True)
+
 
 # Ensure files are readable by the web server
 FILE_UPLOAD_PERMISSIONS = 0o644
@@ -38,6 +42,10 @@ FILE_UPLOAD_DIRECTORY_PERMISSIONS = 0o755
 
 
 SESSION_EXPIRE_AT_BROWSER_CLOSE = env('SESSION_EXPIRE_AT_BROWSER_CLOSE')
+# In Docker the key is generated on the first start and kept in a file of the data volume
+# (SECRET_KEY_FILE), so that `docker compose exec backend python manage.py ...` finds it too
+if 'DJANGO_SECRET_KEY' not in os.environ and os.path.isfile(os.environ.get('SECRET_KEY_FILE', '')):
+    os.environ['DJANGO_SECRET_KEY'] = Path(os.environ['SECRET_KEY_FILE']).read_text().strip()
 SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
 DEBUG = env('DEBUG')
 

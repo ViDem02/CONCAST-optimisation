@@ -15,52 +15,11 @@ from django.conf import settings
 from django.utils import timezone
 
 from DatasetApp.models import GenerationRecord, TemperatureRecord
+from DatasetApp.series import five_minute_grid, hourly_values, to_steps
 from .models import ChillerSimulation, Chiller
 
 
 TIMESTEP_MINUTES = 5  # 5-minute timesteps
-
-
-def retime_hourly_to_5min(hourly_data, start_time, end_time, method='previous'):
-    """
-    Retime hourly data to 5-minute intervals.
-    
-    Args:
-        hourly_data: List of (timestamp, value) tuples with hourly data
-        start_time: datetime - Start time
-        end_time: datetime - End time
-        method: 'previous' (step function) or 'linear' (interpolation)
-    
-    Returns:
-        Tuple of (timesteps, values) at 5-minute intervals
-    """
-    timesteps = []
-    current = start_time
-    while current <= end_time:
-        timesteps.append(current)
-        current += timedelta(minutes=TIMESTEP_MINUTES)
-    
-    result = []
-    hourly_dict = {ts: val for ts, val in hourly_data}
-    
-    for ts in timesteps:
-        if method == 'previous':
-            hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-            result.append(hourly_dict.get(hour_ts, 0))
-        elif method == 'linear':
-            hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-            next_hour_ts = hour_ts + timedelta(hours=1)
-            
-            val_before = hourly_dict.get(hour_ts, 0)
-            val_after = hourly_dict.get(next_hour_ts, 0)
-            
-            minutes_elapsed = ts.minute
-            fraction = minutes_elapsed / 60.0
-            
-            interpolated = val_before + (val_after - val_before) * fraction
-            result.append(interpolated)
-    
-    return timesteps, result
 
 
 def pd_controller(error, prev_error, Kp, Kd, dt):
@@ -179,24 +138,13 @@ def run_chiller_simulation(simulation_id):
     start_time = tz.localize(datetime.combine(simulation.start_date, datetime.min.time()))
     end_time = tz.localize(datetime.combine(simulation.end_date, datetime.max.time()))
     
-    # Validate data coverage
-    generation_records = GenerationRecord.objects.filter(
-        generation_dataset=generation_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
-    
-    temperature_records = TemperatureRecord.objects.filter(
-        temperature_dataset=temperature_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
-    
-    if not temperature_records.exists() or (not simulation.production_plan_result and not generation_records.exists()):
-        raise ValueError("The generation or temperature data do not cover the simulation period")
+    # Every hour of the period must have a value: a missing hour must never become 0 (°C or kW)
+    temperature = hourly_values(
+        TemperatureRecord.objects.filter(temperature_dataset=temperature_dataset), ['outside_temperature'],
+        start_time, end_time, f'outside temperature data "{temperature_dataset.name}"', allow_negative=True)
     
     # Build 5-minute timestep vector
-    timesteps, _ = retime_hourly_to_5min([], start_time, end_time)
+    timesteps = five_minute_grid(start_time, end_time)
     N = len(timesteps)
     dt_h = TIMESTEP_MINUTES / 60.0  # Hours per step
     
@@ -219,25 +167,17 @@ def run_chiller_simulation(simulation_id):
         # kWh per 5-minute timestep → kW: multiply by (60/5) = 12
         total_generation_kW = np.array(wasted_kWh_list) * 12
     else:
-        # Use full generation from datasets (original behavior)
-        # Retime generation data to 5-minute intervals
-        solar_hourly = [(r.timestamp, r.ele_generated_by_solar_kWh) for r in generation_records]
-        cogen_hourly = [(r.timestamp, r.ele_generated_by_cogen_kWh) for r in generation_records]
-        
-        _, solar_5min = retime_hourly_to_5min(solar_hourly, start_time, end_time, method='linear')
-        _, cogen_5min = retime_hourly_to_5min(cogen_hourly, start_time, end_time, method='linear')
-        
-        # Convert to kW (from hourly kWh to instantaneous power)
-        solar_kW = np.array(solar_5min)
-        cogen_kW = np.array(cogen_5min)
-        total_generation_kW = solar_kW + cogen_kW
+        # Use full generation from datasets, interpolated within the hour
+        # (kWh produced in one hour = average power in kW)
+        generation = hourly_values(
+            GenerationRecord.objects.filter(generation_dataset=generation_dataset),
+            ['ele_generated_by_solar_kWh', 'ele_generated_by_cogen_kWh'],
+            start_time, end_time, f'generation data "{generation_dataset.name}"')
+        total_generation_kW = (to_steps(generation, 0, timesteps, linear=True)
+                               + to_steps(generation, 1, timesteps, linear=True))
     
-    # Retime temperature data (linear interpolation for smooth temperature changes)
-    temperature_hourly = [(r.timestamp, r.outside_temperature) for r in temperature_records]
-    _, temperature_5min = retime_hourly_to_5min(
-        temperature_hourly, start_time, end_time, method='linear'
-    )
-    outside_temps = np.array(temperature_5min)
+    # Outside temperature, linearly interpolated for smooth temperature changes
+    outside_temps = to_steps(temperature, 0, timesteps, linear=True)
     
     # Initialize arrays for results
     temperatures = np.zeros(N)

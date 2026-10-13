@@ -6,11 +6,14 @@ Optimization (production plan, generation and prices) into an
 OptimizationProblem following simulator.m, hands it to the optimizer selected
 in the Optimization object (see OptimizerApp.optimizers), and unpacks the
 returned shifts into an optimized production plan and cost metrics:
-1. Retimes hourly datasets to 5-minute timesteps
+1. Checks that generation and prices cover every hour of the week (DatasetApp.series)
+   and retimes them to 5-minute timesteps
 2. Builds production timetable matrix (nPhases x N) where each row is a phase activity
-3. Expands phases to independent runs (contiguous activity periods)
+3. Expands phases to independent runs (contiguous activity periods; the week is
+   periodic, so a run crossing Sunday 24:00 is one run)
 4. Runs the selected optimizer ("milp" or "from-scratch")
-5. Creates optimized production plan with shifted schedules
+5. Checks that the optimised schedule uses exactly the energy of the original one
+6. Creates optimized production plan with shifted schedules
 
 Matrix orientation (following simulator.m):
 - phase_active: nPhases x N (each row is a phase-run, each column is a timestep)
@@ -27,72 +30,33 @@ from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 
+from DatasetApp.series import five_minute_grid, hourly_values, to_steps
 from .optimizers import OptimizationProblem, get_optimizer
-from .optimizers.base import apply_shifts_from_steps, compute_cost
+from .optimizers.base import apply_shifts_from_steps, compute_cost, run_steps
 
 
 TIMESTEP_MINUTES = 5  # 5-minute timesteps
 
 
-def retime_hourly_to_5min(hourly_data, start_time, end_time, method='previous'):
-    """
-    Retime hourly data to 5-minute intervals.
-    
-    Args:
-        hourly_data: List of (timestamp, value) tuples with hourly data
-        start_time: datetime - Start of optimization
-        end_time: datetime - End of optimization
-        method: 'previous' (step function) or 'linear' (interpolation)
-    
-    Returns:
-        Tuple of (timesteps, values) at 5-minute intervals
-    """
-    timesteps = []
-    current = start_time
-    while current <= end_time:
-        timesteps.append(current)
-        current += timedelta(minutes=TIMESTEP_MINUTES)
-    
-    result = []
-    hourly_dict = {ts: val for ts, val in hourly_data}
-    
-    for ts in timesteps:
-        if method == 'previous':
-            # Step function: use most recent hourly value
-            hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-            result.append(hourly_dict.get(hour_ts, 0))
-        elif method == 'linear':
-            # Linear interpolation between hourly points
-            hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-            next_hour_ts = hour_ts + timedelta(hours=1)
-            
-            val_before = hourly_dict.get(hour_ts, 0)
-            val_after = hourly_dict.get(next_hour_ts, 0)
-            
-            minutes_elapsed = ts.minute
-            fraction = minutes_elapsed / 60.0
-            
-            interpolated = val_before + (val_after - val_before) * fraction
-            result.append(interpolated)
-    
-    return timesteps, result
-
-
 def detect_shift_runs(activity_vector):
     """
-    Detect contiguous runs of 1s in a binary activity vector.
+    Detect contiguous runs of 1s in a binary activity vector of the periodic week.
     Each run represents a separate shift that can be optimized independently.
-    
+
+    A run that is active both at the last and at the first step continues across
+    Sunday 24:00: it is returned once, as (start, end) with end >= len(activity_vector)
+    (see optimizers.base.run_steps).
+
     Args:
         activity_vector: List/array of 0s and 1s
-    
+
     Returns:
         List of tuples (start_index, end_index) for each run
     """
     runs = []
     in_run = False
     start_idx = 0
-    
+
     for i, val in enumerate(activity_vector):
         if val > 0.5 and not in_run:
             # Start of new run
@@ -102,11 +66,18 @@ def detect_shift_runs(activity_vector):
             # End of run
             runs.append((start_idx, i - 1))
             in_run = False
-    
+
     # Handle case where last run extends to end
     if in_run:
         runs.append((start_idx, len(activity_vector) - 1))
-    
+
+    # Periodic week: the run at the end continues with the run at the start
+    N = len(activity_vector)
+    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == N - 1:
+        first = runs.pop(0)
+        last = runs.pop()
+        runs.append((last[0], first[1] + N))
+
     return runs
 
 
@@ -187,9 +158,10 @@ def expand_phases_to_runs(phase_active, phase_info, forward_steps, backward_step
             continue
         
         for run_idx, (start, end) in enumerate(runs):
-            # Create activity vector for this run
+            # Create activity vector for this run (wrapping past Sunday 24:00 if needed)
+            steps = np.arange(start, end + 1) % N
             run_activity = np.zeros(N)
-            run_activity[start:end+1] = 1
+            run_activity[steps] = 1
             expanded_active.append(run_activity)
             
             # Create info for this run
@@ -204,8 +176,8 @@ def expand_phases_to_runs(phase_active, phase_info, forward_steps, backward_step
                 'electricity_consumption_kWh': info['electricity_consumption_kWh'],
                 'original_start': start,
                 'original_end': end,
-                'max_forward_steps': int(forward_steps[phase_idx, start:end + 1].min()),
-                'max_backward_steps': int(backward_steps[phase_idx, start:end + 1].min())
+                'max_forward_steps': int(forward_steps[phase_idx, steps].min()),
+                'max_backward_steps': int(backward_steps[phase_idx, steps].min())
             })
     
     # Stack into matrix: nRuns x N
@@ -217,14 +189,23 @@ def expand_phases_to_runs(phase_active, phase_info, forward_steps, backward_step
     return expanded_active, expanded_info, expanded_names
 
 
-def run_optimization(optimization_id):
+STEPS = ['Checking the data', 'Building the model', 'Searching for the cheapest timetable',
+         'Writing the optimised plan']
+
+
+def run_optimization(optimization_id, progress=None):
     """
     Run the full optimization for an Optimization object, using the
     optimizer selected in its `optimizer` field.
     
+    Args:
+        progress: optional callable progress(step, detail='', time_limit=None), called when each of
+            the STEPS (numbered from 1) starts; see OptimizerApp.background
+    
     Returns:
         Updated Optimization object with results
     """
+    report = progress or (lambda step, detail='', time_limit=None: None)
     # Import models here to avoid circular imports
     from PlanningApp.models import WeeklyProductionPlan, Process, Shift
     from DatasetApp.models import GenerationDataset, GenerationRecord, PricesDataset, PricesRecord
@@ -248,27 +229,23 @@ def run_optimization(optimization_id):
     start_time = tz.localize(datetime.combine(optimization.reference_week_start, datetime.min.time()))
     end_time = tz.localize(datetime.combine(optimization.reference_week_end, datetime.max.time()))
     
-    # Validate data coverage
-    generation_records = GenerationRecord.objects.filter(
-        generation_dataset=generation_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
-    
-    prices_records = PricesRecord.objects.filter(
-        prices_dataset=prices_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
-    
-    if not generation_records.exists() or not prices_records.exists():
-        raise ValueError("The generation or prices data do not cover the reference week")
+    report(1, 'Generation and prices of every hour of the week')
+    # Every hour of the week must have finite, non-negative generation and prices:
+    # a missing hour must never be read as zero (free electricity)
+    generation = hourly_values(
+        GenerationRecord.objects.filter(generation_dataset=generation_dataset),
+        ['ele_generated_by_solar_kWh', 'ele_generated_by_cogen_kWh'],
+        start_time, end_time, f'generation data "{generation_dataset.name}"')
+    prices = hourly_values(
+        PricesRecord.objects.filter(prices_dataset=prices_dataset), ['electricity_price'],
+        start_time, end_time, f'electricity prices "{prices_dataset.name}"')
     
     # Build 5-minute timestep vector
-    timesteps, _ = retime_hourly_to_5min([], start_time, end_time)
+    timesteps = five_minute_grid(start_time, end_time)
     N = len(timesteps)
     dt_h = TIMESTEP_MINUTES / 60.0  # Hours per step
     
+    report(2, 'Runs of the production plan and their allowed positions')
     # Build production matrix: nPhases x N (following simulator.m approach)
     phase_active, phase_info, forward_steps, backward_steps = build_production_matrix(
         optimization.reference_production_plan,
@@ -291,24 +268,10 @@ def run_optimization(optimization_id):
         consumption_per_step = info['electricity_consumption_kWh'] * dt_h
         elec_demand_matrix[i, :] = phase_active[i, :] * consumption_per_step
     
-    # Retime generation data to 5-minute intervals
-    solar_hourly = [(r.timestamp, r.ele_generated_by_solar_kWh) for r in generation_records]
-    cogen_hourly = [(r.timestamp, r.ele_generated_by_cogen_kWh) for r in generation_records]
-    
-    _, solar_5min = retime_hourly_to_5min(solar_hourly, start_time, end_time, method='linear')
-    _, cogen_5min = retime_hourly_to_5min(cogen_hourly, start_time, end_time, method='linear')
-    
-    # Convert to kWh per step
-    solar_5min_kWh = np.array([val * dt_h for val in solar_5min])
-    cogen_5min_kWh = np.array([val * dt_h for val in cogen_5min])
-    gen_kWh = solar_5min_kWh + cogen_5min_kWh
-    
-    # Retime prices data
-    electricity_price_hourly = [(r.timestamp, r.electricity_price) for r in prices_records]
-    _, electricity_price_5min = retime_hourly_to_5min(
-        electricity_price_hourly, start_time, end_time, method='previous'
-    )
-    price_el = np.array(electricity_price_5min)
+    # Generation (kWh per step, interpolated within the hour) and prices (held within the hour)
+    gen_kWh = (to_steps(generation, 0, timesteps, linear=True)
+               + to_steps(generation, 1, timesteps, linear=True)) * dt_h
+    price_el = to_steps(prices, 0, timesteps, linear=False)
     
     # Run the selected optimizer
     problem = OptimizationProblem(
@@ -319,6 +282,9 @@ def run_optimization(optimization_id):
                                   for info in phase_info], dtype=int),
         run_info=phase_info
     )
+    positions = sum(i['max_backward_steps'] + i['max_forward_steps'] + 1 for i in phase_info)
+    report(3, f'{nPhases} runs, {positions:,} possible positions ({optimizer.label})',
+           time_limit=getattr(optimizer, 'time_limit', None))
     result = optimizer.optimize(problem)
     
     # Ensure the returned shifts are integers within the asymmetric bounds -B_r..F_r
@@ -337,6 +303,13 @@ def run_optimization(optimization_id):
     final_total_demand = final_shifted_demand.sum(axis=0)  # Sum across phases
     final_cost, final_details = compute_cost(final_total_demand, gen_kWh, price_el)
     
+    # Safety net: moving shifts must never create or destroy energy
+    baseline_energy, final_energy = float(baseline_demand.sum()), float(final_total_demand.sum())
+    if not np.isclose(final_energy, baseline_energy, rtol=1e-9, atol=1e-6):
+        raise RuntimeError(f'The optimised schedule uses {final_energy:.3f} kWh instead of '
+                           f'{baseline_energy:.3f} kWh: it was not saved.')
+    
+    report(4, f'{int((current_shifts != 0).sum())} runs moved')
     # Create or update optimized production plan
     with transaction.atomic():
         existing_plan = optimization.optimized_production_plan
@@ -380,24 +353,12 @@ def run_optimization(optimization_id):
             # Get shift for this phase-run
             shift_minutes = int(current_shifts[i] * TIMESTEP_MINUTES)
             
-            # Get original shift timing from phase_info
-            original_start_step = info['original_start']
-            original_end_step = info['original_end']
-            
-            # Apply shift
-            new_start_step = original_start_step + current_shifts[i]
-            new_end_step = original_end_step + current_shifts[i]
-            
-            # Convert back to day/hour/minute
+            # New first step and first step after the run, around the periodic week:
+            # a run moved past Sunday 24:00 continues on Monday 00:00 (and vice versa)
+            new_start_step = (info['original_start'] + current_shifts[i]) % N
+            new_end_step = (info['original_end'] + current_shifts[i] + 1) % N
             start_ts = timesteps[int(new_start_step)]
-            # end_step is inclusive (last active timestep), so we need the END of that timestep
-            # which is the START of the next timestep
-            end_step_idx = int(new_end_step) + 1
-            if end_step_idx < len(timesteps):
-                end_ts = timesteps[end_step_idx]
-            else:
-                # If we're at the last timestep, add 5 minutes to it
-                end_ts = timesteps[int(new_end_step)] + timedelta(minutes=TIMESTEP_MINUTES)
+            end_ts = timesteps[int(new_end_step)]
             
             # Create shifted shift
             Shift.objects.create(
@@ -444,11 +405,15 @@ def run_optimization(optimization_id):
             'baseline_cost': float(baseline_cost),
             'final_cost': float(final_cost),
             'total_wasted_energy': float(final_details['total_wasted']),
+            'demand_kWh': {'original': baseline_energy, 'optimized': final_energy},
             'shift_changes': shift_changes,
             'num_timesteps': N,
             'num_runs_optimized': nPhases
         }
         
-        optimization.save()
+        # Only the result fields: the live progress is written concurrently by OptimizerApp.background
+        optimization.save(update_fields=[
+            'optimized_production_plan', 'initial_cost_euros', 'optimized_cost_euros', 'cost_savings_euros',
+            'cost_savings_percent', 'completed_at', 'optimization_data'])
     
     return optimization

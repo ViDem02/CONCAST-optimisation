@@ -32,10 +32,16 @@ class OptimizationSerializer(ReferenceWeekMixin, serializers.ModelSerializer):
         read_only=True
     )
     is_completed = serializers.BooleanField(read_only=True)
+    live = serializers.SerializerMethodField()
+    
+    def get_live(self, obj):
+        from .background import progress_of
+        return progress_of(obj)
     
     class Meta:
         model = Optimization
         fields = [
+            'live',
             'id',
             'name',
             'notes',
@@ -83,6 +89,11 @@ class OptimizationDetailSerializer(ReferenceWeekMixin, serializers.ModelSerializ
         read_only=True
     )
     is_completed = serializers.BooleanField(read_only=True)
+    live = serializers.SerializerMethodField()
+    
+    def get_live(self, obj):
+        from .background import progress_of
+        return progress_of(obj)
     
     class Meta:
         model = Optimization

@@ -1,7 +1,9 @@
 """
-Reproduces issue 1 of the technical note: a flexible run on Sunday night is
-pushed out of the week (its demand disappears) and the write-back fails.
-Run it on a throw-away database:
+The end-of-week case: a flexible run on Sunday night allowed to start one hour
+later. Before the periodic week was introduced, the run was pushed out of the
+week (its demand disappeared, the cost "dropped" to zero) and the write-back
+failed with IndexError. Now it keeps its energy and cost (flat price) and the
+plan is written. Run it on a throw-away database:
 
     cd backend
     SQLITE_PATH=/tmp/edge.sqlite3 DJANGO_SECRET_KEY=dev DEBUG=True python manage.py migrate

@@ -76,3 +76,11 @@ class RunSimulationTests(TestCase):
         self.assertAlmostEqual(results.optimized_cost_euros, 240 * 0.5)  # No solar in the afternoon
         self.assertAlmostEqual(results.savings_euros, results.original_cost_euros - results.optimized_cost_euros)
         self.assertLess(results.savings_euros, 0)
+
+    def test_missing_hours_are_refused(self):
+        from DatasetApp.series import MissingDataError
+        GenerationRecord.objects.filter(generation_dataset=self.generation, timestamp__hour__in=[13, 14]).delete()
+        with self.assertRaisesMessage(MissingDataError, 'have no value for 2 hour(s)'):
+            self.simulate()
+        self.assertFalse(Simulation.objects.filter(results__isnull=False).exists())
+

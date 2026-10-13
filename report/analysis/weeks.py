@@ -1,8 +1,8 @@
 """
 Shared helpers of the analysis scripts: rebuild, without Django, the
 OptimizationProblem that SPARC builds for a reference week, from the CSV files
-in data/ (same 5-minute grid, run detection, interpolation and tolerances as
-OptimizerApp.optimizer_packager), and evaluate shift vectors with the same cost.
+in data/ (same 5-minute grid, periodic run detection, interpolation, data checks and
+tolerances as OptimizerApp.optimizer_packager), and evaluate shift vectors with the same cost.
 """
 
 import csv
@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 DATA = REPO / 'data'
 sys.path.insert(0, str(REPO / 'backend'))
 
-from OptimizerApp.optimizers.base import OptimizationProblem, apply_shifts_from_steps, compute_cost  # noqa: E402
+from OptimizerApp.optimizers.base import OptimizationProblem, apply_shifts_from_steps, compute_cost, run_steps  # noqa: E402
 
 STEP = 5                 # minutes
 DT = STEP / 60           # hours per step
@@ -61,12 +61,15 @@ def load_plan(window_minutes=None):
 
 
 def _retime(hourly, timesteps, linear):
+    """Like DatasetApp.series: every hour must exist; the last hour holds if there is no next one."""
     values = []
     for ts in timesteps:
         hour = ts.replace(minute=0)
-        before = hourly.get(hour, 0)
+        if hour not in hourly:
+            raise ValueError(f'missing hour {hour}')
+        before = hourly[hour]
         if linear:
-            after = hourly.get(hour + timedelta(hours=1), 0)
+            after = hourly.get(hour + timedelta(hours=1), before)
             values.append(before + (after - before) * ts.minute / 60)
         else:
             values.append(before)
@@ -74,6 +77,7 @@ def _retime(hourly, timesteps, linear):
 
 
 def _runs(activity):
+    """Blocks of activity; a block crossing Sunday 24:00 is one run with end >= N (periodic week)."""
     runs, start = [], None
     for i, value in enumerate(list(activity) + [0]):
         if value and start is None:
@@ -81,6 +85,10 @@ def _runs(activity):
         elif not value and start is not None:
             runs.append((start, i - 1))
             start = None
+    N = len(activity)
+    if len(runs) > 1 and runs[0][0] == 0 and runs[-1][1] == N - 1:
+        first, last = runs.pop(0), runs.pop()
+        runs.append((last[0], first[1] + N))
     return runs
 
 
@@ -94,15 +102,15 @@ def build_problem(week_start, generation, prices, plan):
         activity = [template[(name, ts.weekday(), ts.hour * 60 + ts.minute // 15 * 15)] for ts in timesteps]
         for number, (start, last) in enumerate(_runs(activity), start=1):
             demand = np.zeros(len(timesteps))
-            demand[start:last + 1] = config[name]['electricity_consumption_kWh'] * DT
+            demand[np.arange(start, last + 1) % len(timesteps)] = config[name]['electricity_consumption_kWh'] * DT
             rows.append(demand)
             info.append(dict(process_id=process_id, process_name=name, run_name=f'{name}_run{number}',
                              run_number=number, electricity_consumption_kWh=config[name]['electricity_consumption_kWh'],
                              original_start=start, original_end=last,
                              max_forward_steps=config[name]['max_forward_minutes'] // STEP,
                              max_backward_steps=config[name]['max_backwards_minutes'] // STEP))
-    # Records of the week only, as the database query of the packager (the next Monday 00:00 is excluded)
-    in_week = lambda hourly: {k: v for k, v in hourly.items() if week_start <= k <= end}
+    # Records of the week plus the next Monday 00:00 (used to interpolate the last hour)
+    in_week = lambda hourly: {k: v for k, v in hourly.items() if week_start <= k <= end + timedelta(hours=1)}
     week_generation = in_week(generation)
     solar = _retime({k: v[1] for k, v in week_generation.items()}, timesteps, linear=True) * DT
     cogen = _retime({k: v[0] for k, v in week_generation.items()}, timesteps, linear=True) * DT
@@ -134,15 +142,14 @@ def evaluate(problem, shift_steps):
 
 def overlaps(problem, shift_steps):
     """Pairs of runs of the same process that overlap after shifting (independent of the MILP)."""
+    N = problem.num_timesteps
     occupied = defaultdict(list)
     for info, k in zip(problem.run_info, shift_steps):
-        first = max(0, info['original_start'] + int(k))
-        last = min(problem.num_timesteps - 1, info['original_end'] + int(k))
-        occupied[info['process_name']].append((first, last, info['run_name']))
+        occupied[info['process_name']].append((set(((run_steps(info, N) + int(k)) % N).tolist()), info['run_name']))
     pairs = []
-    for intervals in occupied.values():
-        intervals.sort()
-        pairs += [(a[2], b[2]) for a, b in zip(intervals, intervals[1:]) if a[1] >= b[0]]
+    for runs in occupied.values():
+        pairs += [(name_a, name_b) for i, (a, name_a) in enumerate(runs)
+                  for b, name_b in runs[i + 1:] if a & b]
     return pairs
 
 

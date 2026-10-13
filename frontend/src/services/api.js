@@ -44,7 +44,9 @@ export const simulationApi = {
 export const optimizationApi = {
   list: () => api.get('/optimizer/optimizations/').then(items),
   get: (id) => api.get(`/optimizer/optimizations/${id}/`).then((r) => r.data),
-  run: (id) => api.post(`/optimizer/optimizations/${id}/run/`),
+  /** Starts the calculation in the background; resolves with its live state (poll progress()). */
+  run: (id) => api.post(`/optimizer/optimizations/${id}/run/`).then((r) => r.data),
+  progress: (id) => api.get(`/optimizer/optimizations/${id}/progress/`).then((r) => r.data),
 };
 
 export const chillerApi = {

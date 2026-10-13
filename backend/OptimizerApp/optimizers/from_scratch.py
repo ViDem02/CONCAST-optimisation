@@ -41,16 +41,8 @@ class FromScratchOptimizer(BaseOptimizer):
             for shift_step in shift_candidates:
                 # Check if shift is within allowed bounds for this phase
                 if abs(shift_step) <= problem.max_shift_steps[i]:
-                    shifted_col = np.zeros(N)
-                    original = elec_demand_matrix[i, :]  # Row i of demand matrix
-
-                    if shift_step == 0:
-                        shifted_col = original
-                    elif shift_step > 0:
-                        shifted_col[shift_step:] = original[:-shift_step]
-                    else:
-                        shifted_col[:shift_step] = original[-shift_step:]
-
+                    # Same periodic shift as problem.cost (no energy lost at the ends of the week)
+                    shifted_col = np.roll(elec_demand_matrix[i, :], shift_step)
                     A[:, col_idx] = shifted_col.reshape(-1, 1)
 
                 col_idx += 1

@@ -2,7 +2,8 @@
 Simulation calculation utilities for computing costs and electricity usage.
 
 This module implements the core simulation logic that:
-1. Retimes hourly datasets to 5-minute timesteps
+1. Checks that the hourly datasets cover every hour of the period and retimes
+   them to 5-minute timesteps (DatasetApp.series: missing data never become zero)
 2. Creates production/generation/prices matrices
 3. Calculates electricity demand, generation, grid purchases, costs, and waste
 """
@@ -13,53 +14,8 @@ import pytz
 from django.conf import settings
 from PlanningApp.models import Simulation
 from DatasetApp.models import GenerationRecord, PricesRecord
+from DatasetApp.series import five_minute_grid, hourly_values, to_steps
 from .models import SimulationResults
-
-
-def retime_hourly_to_5min(hourly_data, start_time, end_time, method='previous'):
-    """
-    Retime hourly data to 5-minute intervals.
-    
-    Args:
-        hourly_data: List of (timestamp, value) tuples with hourly data
-        start_time: datetime - Start of simulation
-        end_time: datetime - End of simulation
-        method: 'previous' (step function) or 'linear' (interpolation)
-    
-    Returns:
-        List of values at 5-minute intervals
-    """
-    # Create 5-minute timestep vector
-    timesteps = []
-    current = start_time
-    while current <= end_time:
-        timesteps.append(current)
-        current += timedelta(minutes=5)
-    
-    result = []
-    hourly_dict = {ts: val for ts, val in hourly_data}
-    
-    for ts in timesteps:
-        if method == 'previous':
-            # Find the most recent hourly timestamp
-            hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-            result.append(hourly_dict.get(hour_ts, 0))
-        elif method == 'linear':
-            # Linear interpolation between hourly points
-            hour_ts = ts.replace(minute=0, second=0, microsecond=0)
-            next_hour_ts = hour_ts + timedelta(hours=1)
-            
-            val_before = hourly_dict.get(hour_ts, 0)
-            val_after = hourly_dict.get(next_hour_ts, 0)
-            
-            # Calculate fraction of hour elapsed
-            minutes_elapsed = ts.minute
-            fraction = minutes_elapsed / 60.0
-            
-            interpolated = val_before + (val_after - val_before) * fraction
-            result.append(interpolated)
-    
-    return timesteps, result
 
 
 def minutes_of_week(timesteps):
@@ -147,34 +103,24 @@ def calculate_electricity_demand(production_matrix):
     return np.asarray(demand, dtype=float)
 
 
-def load_generation_and_prices(simulation, start_time, end_time):
-    """Generation (kWh per step, solar and cogen) and price (EUR/kWh) on the 5-minute grid."""
-    generation_records = GenerationRecord.objects.filter(
-        generation_dataset=simulation.generation_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
+def load_generation_and_prices(simulation, start_time, end_time, timesteps):
+    """
+    Generation (kWh per step, solar and cogen) and price (EUR/kWh) on the 5-minute grid.
 
-    solar_hourly = [(r.timestamp, r.ele_generated_by_solar_kWh) for r in generation_records]
-    cogen_hourly = [(r.timestamp, r.ele_generated_by_cogen_kWh) for r in generation_records]
-
-    _, solar_5min = retime_hourly_to_5min(solar_hourly, start_time, end_time, method='linear')
-    _, cogen_5min = retime_hourly_to_5min(cogen_hourly, start_time, end_time, method='linear')
-
-    prices_records = PricesRecord.objects.filter(
-        prices_dataset=simulation.prices_dataset,
-        timestamp__gte=start_time.replace(minute=0, second=0),
-        timestamp__lte=end_time
-    ).order_by('timestamp')
-
-    electricity_price_hourly = [(r.timestamp, r.electricity_price) for r in prices_records]
-    _, electricity_price_5min = retime_hourly_to_5min(
-        electricity_price_hourly, start_time, end_time, method='previous'
-    )
+    Raises MissingDataError (a ValueError) if any hour of the period is missing or invalid.
+    """
+    generation = hourly_values(
+        GenerationRecord.objects.filter(generation_dataset=simulation.generation_dataset),
+        ['ele_generated_by_solar_kWh', 'ele_generated_by_cogen_kWh'],
+        start_time, end_time, f'generation data "{simulation.generation_dataset.name}"')
+    prices = hourly_values(
+        PricesRecord.objects.filter(prices_dataset=simulation.prices_dataset), ['electricity_price'],
+        start_time, end_time, f'electricity prices "{simulation.prices_dataset.name}"')
 
     # Convert hourly kWh to 5-minute kWh
-    return (np.array(solar_5min) * (5 / 60), np.array(cogen_5min) * (5 / 60),
-            np.array(electricity_price_5min, dtype=float))
+    return (to_steps(generation, 0, timesteps, linear=True) * (5 / 60),
+            to_steps(generation, 1, timesteps, linear=True) * (5 / 60),
+            to_steps(prices, 0, timesteps, linear=False))
 
 
 def run_simulation_for_plan(production_plan, timesteps, solar_5min_kWh, cogen_5min_kWh, electricity_price_5min):
@@ -240,45 +186,8 @@ def run_simulation(simulation_id):
     start_time = tz.localize(datetime.combine(simulation.start_date, datetime.min.time()))
     end_time = tz.localize(datetime.combine(simulation.end_date, datetime.max.time()))
     
-    # Validate that datasets cover the simulation time range
-    generation_records = GenerationRecord.objects.filter(
-        generation_dataset=generation_dataset
-    ).order_by('timestamp')
-    
-    prices_records = PricesRecord.objects.filter(
-        prices_dataset=prices_dataset
-    ).order_by('timestamp')
-    
-    if not generation_records.exists():
-        raise ValueError(f"Generation dataset '{generation_dataset.name}' has no records")
-    
-    if not prices_records.exists():
-        raise ValueError(f"Prices dataset '{prices_dataset.name}' has no records")
-    
-    gen_first = generation_records.first().timestamp
-    gen_last = generation_records.last().timestamp
-    prices_first = prices_records.first().timestamp
-    prices_last = prices_records.last().timestamp
-    
-    # Check if datasets span covers simulation period
-    required_start = start_time.replace(minute=0, second=0, microsecond=0)
-    required_end = end_time.replace(minute=0, second=0, microsecond=0)
-    
-    for label, dataset, first, last in [('generation', generation_dataset, gen_first, gen_last),
-                                        ('prices', prices_dataset, prices_first, prices_last)]:
-        if first > required_start or last < required_end:
-            raise ValueError(
-                f"The {label} data \"{dataset.name}\" covers {first:%d %b %Y} to {last:%d %b %Y}, "
-                f"but the simulation needs {required_start:%d %b %Y} to {required_end:%d %b %Y}. "
-                f"Choose dates inside the data or upload more data."
-            )
-    
     # Build 5-minute timestep vector
-    timesteps = []
-    current = start_time
-    while current <= end_time:
-        timesteps.append(current)
-        current += timedelta(minutes=5)
+    timesteps = five_minute_grid(start_time, end_time)
     
     num_timesteps = len(timesteps)
     
@@ -289,7 +198,7 @@ def run_simulation(simulation_id):
     if not original_plan:
         raise ValueError("Simulation must have a current production plan")
     
-    datasets = load_generation_and_prices(simulation, start_time, end_time)
+    datasets = load_generation_and_prices(simulation, start_time, end_time, timesteps)
     
     # Run simulation for original plan
     original_results = run_simulation_for_plan(original_plan, timesteps, *datasets)

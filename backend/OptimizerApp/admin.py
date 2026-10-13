@@ -6,7 +6,28 @@ from django.utils.html import format_html, format_html_join
 
 from SimulationApp.export_timeshifting import export_timeshifting_to_json
 from simulator_project.admin_tools import RunButtonMixin, euros, frontend_link
+from .background import AlreadyRunning, progress_of, start
 from .models import Optimization
+from .optimizer_packager import STEPS
+
+
+def progress_panel(obj):
+    """Live progress of a running optimisation; the script of change_form_with_run.html updates it."""
+    live = progress_of(obj)
+    progress = live['progress'] or {}
+    step = progress.get('step', 0)
+    items = format_html_join('', '<li class="{}">{}</li>', (
+        ('done' if number < step else 'current' if number == step else '', label)
+        for number, label in enumerate(STEPS, start=1)))
+    return format_html(
+        '<div class="sparc-progress" data-sparc-progress="{}">'
+        '<div class="sparc-progress-bar"><span style="width: {}%"></span></div>'
+        '<p><strong class="sparc-progress-label">{}</strong> <span class="sparc-progress-detail">{}</span> '
+        '<span class="sparc-progress-time"></span></p><ol>{}</ol>'
+        '<p class="sparc-progress-note">This page updates by itself and shows the result when the calculation ends.</p>'
+        '</div>',
+        reverse('optimization-progress', args=[obj.pk]), max(5, 100 * (step - 0.5) / len(STEPS)),
+        progress.get('label', 'Starting'), progress.get('detail', ''), items)
 
 
 def describe_move(minutes):
@@ -42,11 +63,21 @@ class OptimizationAdmin(RunButtonMixin, admin.ModelAdmin):
         # The optimised plan is kept (other simulations may use it) and rewritten by the next run
         return Optimization.objects.filter(pk=obj.pk, completed_at__isnull=False).update(
             completed_at=None, initial_cost_euros=None, optimized_cost_euros=None,
-            cost_savings_euros=None, cost_savings_percent=None, optimization_data=None) > 0
+            cost_savings_euros=None, cost_savings_percent=None, optimization_data=None,
+            status='new', progress=None, error='') > 0
 
     def run_object(self, obj):
-        from .optimizer_packager import run_optimization
-        result = run_optimization(obj.pk)
+        """Start the calculation in the background; the page then shows its progress."""
+        try:
+            thread = start(obj.pk)
+        except AlreadyRunning as e:
+            raise ValueError(str(e))
+        if thread is not None:
+            return f'Optimisation of "{obj.name}" started: its progress is shown below.'
+        # Calculated in the request (OPTIMIZATION_BACKGROUND = False)
+        result = Optimization.objects.get(pk=obj.pk)
+        if result.status == 'failed':
+            raise ValueError(result.error)
         return (f'"{obj.name}" optimised: grid electricity cost of the reference week '
                 f'{euros(result.initial_cost_euros)} → {euros(result.optimized_cost_euros)} '
                 f'(saves {euros(result.cost_savings_euros)}, {result.cost_savings_percent:.1f}%). '
@@ -58,14 +89,26 @@ class OptimizationAdmin(RunButtonMixin, admin.ModelAdmin):
             return '–'
         return f'{euros(obj.cost_savings_euros)} ({obj.cost_savings_percent:.1f}%)'
 
-    @admin.display(description='Calculated', boolean=True)
+    @admin.display(description='Status')
     def calculated(self, obj):
-        return obj.is_completed()
+        status = progress_of(obj)['status']
+        if status == 'running':
+            return format_html('<span class="sparc-warn">Calculating…</span>')
+        if status == 'failed':
+            return format_html('<span class="sparc-error">Failed</span>')
+        return format_html('<span class="sparc-ok">✓</span>') if obj.is_completed() else '–'
 
     @admin.display(description='Result')
     def result(self, obj):
-        if not obj.pk or not obj.is_completed():
+        if not obj.pk:
             return 'Not optimised yet: press "Save and optimise".'
+        live = progress_of(obj)
+        if live['status'] == 'running':
+            return progress_panel(obj)
+        failure = format_html('<p class="sparc-error">The last calculation failed: {}</p>', live['error']) \
+            if live['status'] == 'failed' else ''
+        if not obj.is_completed():
+            return failure or 'Not optimised yet: press "Save and optimise".'
         data = obj.optimization_data or {}
         plan = obj.optimized_production_plan
         status = data.get('solver_status', '')
@@ -99,11 +142,11 @@ class OptimizationAdmin(RunButtonMixin, admin.ModelAdmin):
             'prices_dataset': obj.prices_dataset_id or '',
         })
         return format_html(
-            '<div class="sparc-result"><table>{}</table>'
+            '<div class="sparc-result">{}<table>{}</table>'
             '<p><strong>{} of {} shifts moved</strong> (the others are unchanged):</p><table>{}</table>'
             '<p>{} &nbsp;·&nbsp; <a href="{}">Check the optimised plan over a longer period</a> '
             '(opens a pre-filled cost simulation: choose the dates)</p></div>',
-            format_html_join('', '<tr><th>{}</th><td>{}</td></tr>', rows),
+            failure, format_html_join('', '<tr><th>{}</th><td>{}</td></tr>', rows),
             len(moved), len(data.get('shift_changes', [])), moves,
             frontend_link(f'optimizations/{obj.pk}', 'Show the charts'), check_url)
 

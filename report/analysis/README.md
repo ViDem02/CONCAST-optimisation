@@ -14,4 +14,4 @@ Run them from the repository root with the backend dependencies installed
 | `sensitivity.py` | savings against the width of the movement window | ~15 min |
 | `july_week.py` | the week of 15 July 2024: LP relaxation, model size, one-run cost curves, legacy heuristic | seconds |
 | `toy_examples.py` | the small examples B--E of the technical note | seconds |
-| `edge_case.py` | reproduction of the end-of-week issue (Django shell, throw-away database) | seconds |
+| `edge_case.py` | the end-of-week case that used to lose energy and crash, now fixed (Django shell, throw-away database) | seconds |

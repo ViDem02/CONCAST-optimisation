@@ -62,7 +62,11 @@ Production plans and their simulations:
 
 ### OptimizerApp - `/api/optimizer/`
 
-- **Optimizations**: `/api/optimizer/optimizations/` (`POST …/{id}/run/` or `POST …/run_by_id/` runs one)
+- **Optimizations**: `/api/optimizer/optimizations/`. `POST …/{id}/run/` (or `POST …/run_by_id/`) starts the
+  calculation in the background and answers `202` at once (`409` if it is already running);
+  `GET …/{id}/progress/` returns `{"status": "new" | "running" | "done" | "failed", "steps": [...],
+  "progress": {"step", "label", "detail", "started_at", "time_limit", ...}, "error"}`, polled every
+  second by the website and the admin (`OptimizerApp/background.py`)
 
 ### ChillersApp - `/api/chillers/`
 
@@ -78,7 +82,7 @@ Each endpoint supports the standard REST operations:
 ## Data Models
 
 ### TemperatureDataset / PricesDataset / GenerationDataset
-Named hourly datasets (`name`, unique), uploaded as CSV files from their admin page (the file is checked for missing hours before anything is saved). Their records hold a `timestamp` and:
+Named hourly datasets (`name`, unique), uploaded as CSV files from their admin page (the file is checked for missing hours and non-numeric values before anything is saved). Optimisations and simulations read them through `DatasetApp/series.py`, which requires a finite (and, for generation and prices, non-negative) value for every hour of the period: a missing hour is never read as zero. The hour repeated when clocks go back takes the value of the hour before; the last hour is interpolated towards the next hour when the dataset has it. Their records hold a `timestamp` and:
 - **TemperatureRecord**: `outside_temperature` (°C)
 - **PricesRecord**: `electricity_price` (€/kWh)
 - **GenerationRecord**: `ele_generated_by_solar_kWh`, `ele_generated_by_cogen_kWh`
@@ -102,6 +106,11 @@ Shift schedule for a production process.
 - `start_hour`, `end_hour`: Integer (0-23)
 - `start_minutes`, `end_minutes`: Integer (0-55, multiple of 5)
 - `max_forward_minutes`, `max_backwards_minutes`: Integer (how far the shift may be moved; multiple of 5). Each run takes the tolerance of the shift it comes from (the smaller one when two shifts touch)
+
+The weekly plan is a template that repeats every week, so the optimisation treats the week as
+**periodic**: a run moved past Sunday 24:00 continues on Monday 00:00 (and vice versa), a run that
+crosses Sunday midnight is one run, and moving runs never adds or removes energy (the packager
+refuses to save a schedule whose energy differs from the original one).
 
 ### Simulation
 Evaluation of one or two plans over a period.

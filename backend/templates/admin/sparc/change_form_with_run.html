@@ -9,3 +9,53 @@
 {% endif %}
 {{ block.super }}
 {% endblock %}
+
+{% block admin_change_form_document_ready %}
+{{ block.super }}
+<script>
+// Live progress of a running calculation: poll its state every second, reload when it ends.
+(function () {
+  const panel = document.querySelector('[data-sparc-progress]');
+  if (!panel) return;
+  const label = panel.querySelector('.sparc-progress-label');
+  const detail = panel.querySelector('.sparc-progress-detail');
+  const time = panel.querySelector('.sparc-progress-time');
+  const bar = panel.querySelector('.sparc-progress-bar span');
+  const steps = panel.querySelectorAll('ol li');
+
+  function seconds(from, to) {
+    return Math.max(0, (new Date(to) - new Date(from)) / 1000);
+  }
+
+  function render(state) {
+    const p = state.progress || {};
+    const step = p.step || 0;
+    const total = p.steps || steps.length;
+    const inStep = seconds(p.step_started_at || p.started_at, state.now);
+    // Within the solver step the bar follows the time limit; other steps take a moment
+    const fraction = p.time_limit ? Math.min(inStep / p.time_limit, 0.95) : 0.5;
+    bar.style.width = Math.max(5, 100 * (Math.max(step - 1, 0) + fraction) / total) + '%';
+    label.textContent = (step ? 'Step ' + step + ' of ' + total + ': ' : '') + (p.label || 'Starting');
+    detail.textContent = p.detail ? '· ' + p.detail : '';
+    let text = '· ' + Math.round(seconds(p.started_at, state.now)) + ' s';
+    if (p.time_limit) text += ' (the search stops after at most ' + p.time_limit + ' s)';
+    time.textContent = text;
+    steps.forEach(function (item, index) {
+      item.className = index + 1 < step ? 'done' : index + 1 === step ? 'current' : '';
+    });
+  }
+
+  function poll() {
+    fetch(panel.dataset.sparcProgress, {credentials: 'same-origin'})
+      .then(function (response) { return response.json(); })
+      .then(function (state) {
+        if (state.status !== 'running') { window.location.reload(); return; }
+        render(state);
+        setTimeout(poll, 1000);
+      })
+      .catch(function () { setTimeout(poll, 2000); });
+  }
+  poll();
+})();
+</script>
+{% endblock %}

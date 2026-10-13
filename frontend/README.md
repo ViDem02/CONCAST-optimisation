@@ -24,6 +24,8 @@ and the website sends you to `/admin/login/` when you are not logged in.
   `/simulations/:id`, `/cold-rooms/:id`)
 - `src/services/api.js`: API calls, login redirect, links to the admin
 - `src/components/common.jsx`: formatting helpers, page header, "Calculate now" button
+- `src/components/OptimizationProgress.jsx`: starts an optimisation in the background and shows its
+  live progress (polls `/api/optimizer/optimizations/<id>/progress/` every second)
 - `src/components/ResultsCharts.jsx`: charts of a cost simulation (resolution chosen from the
   length of the period)
 - `src/components/ShiftsGantt.jsx`: one week of a production plan

@@ -19,6 +19,7 @@ RUN DJANGO_SECRET_KEY=build-only python manage.py collectstatic --noinput --verb
 
 # Database and secret key live in the /data volume; the example data are mounted in /app/demo_data
 ENV SQLITE_PATH=/data/sparc.sqlite3 \
+    SECRET_KEY_FILE=/data/secret_key \
     SPARC_DEMO_DATA=/app/demo_data
 
 EXPOSE 8000

@@ -8,6 +8,7 @@ the form (and show the errors next to the upload field) before saving.
 
 import csv
 import io
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -96,6 +97,9 @@ def read_csv(kind, source, check_continuity=True):
             values = {field: float(row[column]) for column, field in spec.columns.items()}
         except (TypeError, ValueError) as e:
             errors.append(f'line {line}: {e}')
+            continue
+        if not all(math.isfinite(v) for v in values.values()):
+            errors.append(f'line {line}: values must be numbers (not NaN or infinite)')
             continue
         if kind != 'temperature' and any(v < 0 for v in values.values()):
             errors.append(f'line {line}: values cannot be negative')
