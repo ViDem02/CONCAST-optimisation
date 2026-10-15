@@ -1,3 +1,6 @@
+private docs
+template
+
 # Environment variables
 *.env
 
